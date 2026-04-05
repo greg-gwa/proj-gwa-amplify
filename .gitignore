@@ -1,0 +1,17 @@
+node_modules/
+.next/
+.env
+.env.local
+*.pyc
+__pycache__/
+.terraform/
+.terraform.lock.hcl
+terraform.tfstate
+terraform.tfstate.backup
+*.tfvars
+/tmp/
+*.mp4
+*.mp3
+*.ogg
+test-clips/
+*.pdf

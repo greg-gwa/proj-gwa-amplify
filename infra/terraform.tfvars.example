@@ -1,0 +1,7 @@
+# Copy to terraform.tfvars and fill in
+project_id      = "proj-amplify"
+region          = "us-central1"
+org_id          = "1077871650233"
+billing_account = "016CB4-D090BE-CFA23C"
+anthropic_api_key = "sk-ant-..."
+domain          = "amplify.gwanalytics.ai"

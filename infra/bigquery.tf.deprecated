@@ -1,0 +1,372 @@
+# ------------------------------------------------------------------
+# BigQuery Dataset
+# ------------------------------------------------------------------
+resource "google_bigquery_dataset" "amplify" {
+  dataset_id = "amplify"
+  project    = google_project.amplify.project_id
+  location   = "US"
+
+  depends_on = [google_project_service.apis["bigquery.googleapis.com"]]
+}
+
+# ------------------------------------------------------------------
+# Pipeline Tables
+# ------------------------------------------------------------------
+resource "google_bigquery_table" "raw_emails" {
+  dataset_id = google_bigquery_dataset.amplify.dataset_id
+  table_id   = "raw_emails"
+  project    = google_project.amplify.project_id
+
+  schema = jsonencode([
+    { name = "id",               type = "STRING",    mode = "REQUIRED" },
+    { name = "received_at",      type = "TIMESTAMP", mode = "REQUIRED" },
+    { name = "from_address",     type = "STRING",    mode = "NULLABLE" },
+    { name = "to_address",       type = "STRING",    mode = "NULLABLE" },
+    { name = "subject",          type = "STRING",    mode = "NULLABLE" },
+    { name = "body_text",        type = "STRING",    mode = "NULLABLE" },
+    { name = "body_html",        type = "STRING",    mode = "NULLABLE" },
+    { name = "raw_storage_path", type = "STRING",    mode = "NULLABLE" },
+    { name = "attachment_count", type = "INTEGER",   mode = "NULLABLE" },
+    { name = "processed",        type = "BOOLEAN",   mode = "NULLABLE" },
+    { name = "processed_at",     type = "TIMESTAMP", mode = "NULLABLE" },
+  ])
+}
+
+# ------------------------------------------------------------------
+# Reference Data
+# ------------------------------------------------------------------
+resource "google_bigquery_table" "markets" {
+  dataset_id = google_bigquery_dataset.amplify.dataset_id
+  table_id   = "markets"
+  project    = google_project.amplify.project_id
+
+  schema = jsonencode([
+    { name = "id",         type = "STRING",    mode = "REQUIRED" },
+    { name = "name",       type = "STRING",    mode = "REQUIRED" },
+    { name = "dma_code",   type = "INTEGER",   mode = "NULLABLE" },
+    { name = "dma_rank",   type = "INTEGER",   mode = "NULLABLE" },
+    { name = "state",      type = "STRING",    mode = "NULLABLE" },
+    { name = "created_at", type = "TIMESTAMP", mode = "NULLABLE" },
+  ])
+}
+
+resource "google_bigquery_table" "stations" {
+  dataset_id = google_bigquery_dataset.amplify.dataset_id
+  table_id   = "stations"
+  project    = google_project.amplify.project_id
+
+  schema = jsonencode([
+    { name = "id",          type = "STRING",  mode = "REQUIRED" },
+    { name = "call_sign",   type = "STRING",  mode = "REQUIRED" },
+    { name = "network",     type = "STRING",  mode = "NULLABLE" },
+    { name = "market_id",   type = "STRING",  mode = "NULLABLE" },
+    { name = "market_name", type = "STRING",  mode = "NULLABLE" },
+    { name = "owner",       type = "STRING",  mode = "NULLABLE" },
+    { name = "media_type",  type = "STRING",  mode = "NULLABLE" },
+    { name = "created_at",  type = "TIMESTAMP", mode = "NULLABLE" },
+  ])
+}
+
+resource "google_bigquery_table" "districts" {
+  dataset_id = google_bigquery_dataset.amplify.dataset_id
+  table_id   = "districts"
+  project    = google_project.amplify.project_id
+
+  schema = jsonencode([
+    { name = "id",            type = "STRING",    mode = "REQUIRED" },
+    { name = "name",          type = "STRING",    mode = "REQUIRED" },
+    { name = "state",         type = "STRING",    mode = "NULLABLE" },
+    { name = "district_type", type = "STRING",    mode = "NULLABLE" },
+    { name = "cycle_year",    type = "INTEGER",   mode = "NULLABLE" },
+    { name = "created_at",    type = "TIMESTAMP", mode = "NULLABLE" },
+  ])
+}
+
+resource "google_bigquery_table" "contacts" {
+  dataset_id = google_bigquery_dataset.amplify.dataset_id
+  table_id   = "contacts"
+  project    = google_project.amplify.project_id
+
+  schema = jsonencode([
+    { name = "id",         type = "STRING",    mode = "REQUIRED" },
+    { name = "name",       type = "STRING",    mode = "NULLABLE" },
+    { name = "title",      type = "STRING",    mode = "NULLABLE" },
+    { name = "company",    type = "STRING",    mode = "NULLABLE" },
+    { name = "email",      type = "STRING",    mode = "NULLABLE" },
+    { name = "phone",      type = "STRING",    mode = "NULLABLE" },
+    { name = "stations",   type = "STRING",    mode = "REPEATED" },
+    { name = "created_at", type = "TIMESTAMP", mode = "NULLABLE" },
+  ])
+}
+
+# ------------------------------------------------------------------
+# Spending Data
+# ------------------------------------------------------------------
+resource "google_bigquery_table" "spenders" {
+  dataset_id = google_bigquery_dataset.amplify.dataset_id
+  table_id   = "spenders"
+  project    = google_project.amplify.project_id
+
+  schema = jsonencode([
+    { name = "id",         type = "STRING",    mode = "REQUIRED" },
+    { name = "name",       type = "STRING",    mode = "REQUIRED" },
+    { name = "type",       type = "STRING",    mode = "NULLABLE" },
+    { name = "agency",     type = "STRING",    mode = "NULLABLE" },
+    { name = "party",      type = "STRING",    mode = "NULLABLE" },
+    { name = "district_id", type = "STRING",   mode = "NULLABLE" },
+    { name = "fec_id",     type = "STRING",    mode = "NULLABLE" },
+    { name = "notes",      type = "STRING",    mode = "NULLABLE" },
+    { name = "created_at", type = "TIMESTAMP", mode = "NULLABLE" },
+    { name = "updated_at", type = "TIMESTAMP", mode = "NULLABLE" },
+  ])
+}
+
+resource "google_bigquery_table" "buys" {
+  dataset_id = google_bigquery_dataset.amplify.dataset_id
+  table_id   = "buys"
+  project    = google_project.amplify.project_id
+
+  schema = jsonencode([
+    { name = "id",                    type = "STRING",    mode = "REQUIRED" },
+    { name = "estimate_number",       type = "STRING",    mode = "NULLABLE" },
+    { name = "spender_id",           type = "STRING",    mode = "REQUIRED" },
+    { name = "spender_name",         type = "STRING",    mode = "NULLABLE" },
+    { name = "agency",               type = "STRING",    mode = "NULLABLE" },
+    { name = "district_id",          type = "STRING",    mode = "NULLABLE" },
+    { name = "flight_start",         type = "DATE",      mode = "NULLABLE" },
+    { name = "flight_end",           type = "DATE",      mode = "NULLABLE" },
+    { name = "spot_length_seconds",  type = "INTEGER",   mode = "NULLABLE" },
+    { name = "total_dollars",        type = "FLOAT",     mode = "NULLABLE" },
+    { name = "status",               type = "STRING",    mode = "NULLABLE" },
+    { name = "is_revision",          type = "BOOLEAN",   mode = "NULLABLE" },
+    { name = "revision_of_id",       type = "STRING",    mode = "NULLABLE" },
+    { name = "primary_support",      type = "STRING",    mode = "NULLABLE" },
+    { name = "source_email_id",      type = "STRING",    mode = "NULLABLE" },
+    { name = "source_format",        type = "STRING",    mode = "NULLABLE" },
+    { name = "extraction_confidence", type = "FLOAT",    mode = "NULLABLE" },
+    { name = "raw_extraction_json",  type = "STRING",    mode = "NULLABLE" },
+    { name = "notes",                type = "STRING",    mode = "NULLABLE" },
+    { name = "created_at",           type = "TIMESTAMP", mode = "NULLABLE" },
+    { name = "updated_at",           type = "TIMESTAMP", mode = "NULLABLE" },
+  ])
+}
+
+resource "google_bigquery_table" "buy_lines" {
+  dataset_id = google_bigquery_dataset.amplify.dataset_id
+  table_id   = "buy_lines"
+  project    = google_project.amplify.project_id
+
+  schema = jsonencode([
+    { name = "id",                    type = "STRING",    mode = "REQUIRED" },
+    { name = "buy_id",               type = "STRING",    mode = "REQUIRED" },
+    { name = "station_call_sign",    type = "STRING",    mode = "REQUIRED" },
+    { name = "station_id",           type = "STRING",    mode = "NULLABLE" },
+    { name = "market_name",          type = "STRING",    mode = "NULLABLE" },
+    { name = "market_id",            type = "STRING",    mode = "NULLABLE" },
+    { name = "network",              type = "STRING",    mode = "NULLABLE" },
+    { name = "spot_length_seconds",  type = "INTEGER",   mode = "NULLABLE" },
+    { name = "total_dollars",        type = "FLOAT",     mode = "NULLABLE" },
+    { name = "flight_start",         type = "DATE",      mode = "NULLABLE" },
+    { name = "flight_end",           type = "DATE",      mode = "NULLABLE" },
+    { name = "source_contact_name",  type = "STRING",    mode = "NULLABLE" },
+    { name = "source_contact_email", type = "STRING",    mode = "NULLABLE" },
+    { name = "source_contact_phone", type = "STRING",    mode = "NULLABLE" },
+    { name = "created_at",           type = "TIMESTAMP", mode = "NULLABLE" },
+  ])
+}
+
+resource "google_bigquery_table" "buy_line_weeks" {
+  dataset_id = google_bigquery_dataset.amplify.dataset_id
+  table_id   = "buy_line_weeks"
+  project    = google_project.amplify.project_id
+
+  schema = jsonencode([
+    { name = "id",          type = "STRING",    mode = "REQUIRED" },
+    { name = "buy_line_id", type = "STRING",    mode = "REQUIRED" },
+    { name = "week_start",  type = "DATE",      mode = "REQUIRED" },
+    { name = "week_end",    type = "DATE",      mode = "NULLABLE" },
+    { name = "dollars",     type = "FLOAT",     mode = "NULLABLE" },
+    { name = "spots",       type = "INTEGER",   mode = "NULLABLE" },
+    { name = "created_at",  type = "TIMESTAMP", mode = "NULLABLE" },
+  ])
+}
+
+# ------------------------------------------------------------------
+# Creative Data
+# ------------------------------------------------------------------
+resource "google_bigquery_table" "creatives" {
+  dataset_id = google_bigquery_dataset.amplify.dataset_id
+  table_id   = "creatives"
+  project    = google_project.amplify.project_id
+
+  schema = jsonencode([
+    { name = "id",                   type = "STRING",    mode = "REQUIRED" },
+    { name = "spender_id",          type = "STRING",    mode = "NULLABLE" },
+    { name = "title",               type = "STRING",    mode = "NULLABLE" },
+    { name = "ad_type",             type = "STRING",    mode = "NULLABLE" },
+    { name = "description",         type = "STRING",    mode = "NULLABLE" },
+    { name = "spot_length_seconds", type = "INTEGER",   mode = "NULLABLE" },
+    { name = "transcript",          type = "STRING",    mode = "NULLABLE" },
+    { name = "transcript_language", type = "STRING",    mode = "NULLABLE" },
+    { name = "clip_url",            type = "STRING",    mode = "NULLABLE" },
+    { name = "storage_path",        type = "STRING",    mode = "NULLABLE" },
+    { name = "thumbnail_path",      type = "STRING",    mode = "NULLABLE" },
+    { name = "source_platform",     type = "STRING",    mode = "NULLABLE" },
+    { name = "source_clip_id",      type = "STRING",    mode = "NULLABLE" },
+    { name = "station_first_seen",  type = "STRING",    mode = "NULLABLE" },
+    { name = "market_first_seen",   type = "STRING",    mode = "NULLABLE" },
+    { name = "date_first_aired",    type = "DATE",      mode = "NULLABLE" },
+    { name = "date_uploaded",       type = "DATE",      mode = "NULLABLE" },
+    { name = "extraction_json",     type = "STRING",    mode = "NULLABLE" },
+    { name = "sentiment",           type = "STRING",    mode = "NULLABLE" },
+    { name = "keywords",            type = "STRING",    mode = "REPEATED" },
+    { name = "themes",              type = "STRING",    mode = "REPEATED" },
+    { name = "transcript_hash",     type = "STRING",    mode = "NULLABLE" },
+    { name = "total_airings",       type = "INTEGER",   mode = "NULLABLE" },
+    { name = "first_detected_at",   type = "TIMESTAMP", mode = "NULLABLE" },
+    { name = "last_detected_at",    type = "TIMESTAMP", mode = "NULLABLE" },
+    { name = "created_at",          type = "TIMESTAMP", mode = "NULLABLE" },
+    { name = "updated_at",          type = "TIMESTAMP", mode = "NULLABLE" },
+  ])
+}
+
+resource "google_bigquery_table" "creative_assignments" {
+  dataset_id = google_bigquery_dataset.amplify.dataset_id
+  table_id   = "creative_assignments"
+  project    = google_project.amplify.project_id
+
+  schema = jsonencode([
+    { name = "id",          type = "STRING",    mode = "REQUIRED" },
+    { name = "creative_id", type = "STRING",    mode = "REQUIRED" },
+    { name = "buy_line_id", type = "STRING",    mode = "REQUIRED" },
+    { name = "traffic_pct", type = "INTEGER",   mode = "NULLABLE" },
+    { name = "created_at",  type = "TIMESTAMP", mode = "NULLABLE" },
+  ])
+}
+
+resource "google_bigquery_table" "creative_airings" {
+  dataset_id = google_bigquery_dataset.amplify.dataset_id
+  table_id   = "creative_airings"
+  project    = google_project.amplify.project_id
+
+  schema = jsonencode([
+    { name = "id",                type = "STRING",    mode = "REQUIRED" },
+    { name = "creative_id",      type = "STRING",    mode = "REQUIRED" },
+    { name = "station_call_sign", type = "STRING",   mode = "NULLABLE" },
+    { name = "market_name",      type = "STRING",    mode = "NULLABLE" },
+    { name = "aired_at",         type = "TIMESTAMP", mode = "NULLABLE" },
+    { name = "daypart",          type = "STRING",    mode = "NULLABLE" },
+    { name = "program",          type = "STRING",    mode = "NULLABLE" },
+    { name = "source_clip_id",   type = "STRING",    mode = "NULLABLE" },
+    { name = "source_platform",  type = "STRING",    mode = "NULLABLE" },
+    { name = "confidence",       type = "FLOAT",     mode = "NULLABLE" },
+    { name = "created_at",       type = "TIMESTAMP", mode = "NULLABLE" },
+  ])
+}
+
+resource "google_bigquery_table" "ad_clips" {
+  dataset_id = google_bigquery_dataset.amplify.dataset_id
+  table_id   = "ad_clips"
+  project    = google_project.amplify.project_id
+
+  schema = jsonencode([
+    { name = "id",                     type = "STRING",    mode = "REQUIRED" },
+    { name = "source_url",            type = "STRING",    mode = "NULLABLE" },
+    { name = "source_platform",       type = "STRING",    mode = "NULLABLE" },
+    { name = "media_type",            type = "STRING",    mode = "NULLABLE" },
+    { name = "station_or_channel",    type = "STRING",    mode = "NULLABLE" },
+    { name = "program",               type = "STRING",    mode = "NULLABLE" },
+    { name = "clip_duration_seconds", type = "FLOAT",     mode = "NULLABLE" },
+    { name = "transcript",            type = "STRING",    mode = "NULLABLE" },
+    { name = "transcript_language",   type = "STRING",    mode = "NULLABLE" },
+    { name = "transcript_confidence", type = "FLOAT",     mode = "NULLABLE" },
+    { name = "show_id",               type = "STRING",    mode = "NULLABLE" },
+    { name = "show_title_extracted",  type = "STRING",    mode = "NULLABLE" },
+    { name = "venue_extracted",       type = "STRING",    mode = "NULLABLE" },
+    { name = "ad_type",               type = "STRING",    mode = "NULLABLE" },
+    { name = "advertiser",            type = "STRING",    mode = "NULLABLE" },
+    { name = "dates_mentioned",       type = "STRING",    mode = "REPEATED" },
+    { name = "prices_mentioned",      type = "STRING",    mode = "REPEATED" },
+    { name = "call_to_action",        type = "STRING",    mode = "NULLABLE" },
+    { name = "is_relevant",           type = "BOOLEAN",   mode = "NULLABLE" },
+    { name = "confidence",            type = "FLOAT",     mode = "NULLABLE" },
+    { name = "raw_storage_path",      type = "STRING",    mode = "NULLABLE" },
+    { name = "extraction_json",       type = "STRING",    mode = "NULLABLE" },
+    { name = "created_at",            type = "TIMESTAMP", mode = "NULLABLE" },
+    { name = "processed_at",          type = "TIMESTAMP", mode = "NULLABLE" },
+  ])
+}
+
+# ------------------------------------------------------------------
+# Scout / Early Warning
+# ------------------------------------------------------------------
+resource "google_bigquery_table" "radar_items" {
+  dataset_id = google_bigquery_dataset.amplify.dataset_id
+  table_id   = "radar_items"
+  project    = google_project.amplify.project_id
+
+  schema = jsonencode([
+    { name = "id",                type = "STRING",    mode = "REQUIRED" },
+    { name = "fcc_filing_id",    type = "STRING",    mode = "NULLABLE" },
+    { name = "station_call_sign", type = "STRING",   mode = "NULLABLE" },
+    { name = "market_name",      type = "STRING",    mode = "NULLABLE" },
+    { name = "spender_name",     type = "STRING",    mode = "NULLABLE" },
+    { name = "spender_type",     type = "STRING",    mode = "NULLABLE" },
+    { name = "flight_start",     type = "DATE",      mode = "NULLABLE" },
+    { name = "flight_end",       type = "DATE",      mode = "NULLABLE" },
+    { name = "total_dollars",    type = "FLOAT",     mode = "NULLABLE" },
+    { name = "filing_url",       type = "STRING",    mode = "NULLABLE" },
+    { name = "status",           type = "STRING",    mode = "NULLABLE" },
+    { name = "matched_buy_id",   type = "STRING",    mode = "NULLABLE" },
+    { name = "notes",            type = "STRING",    mode = "NULLABLE" },
+    { name = "detected_at",      type = "TIMESTAMP", mode = "NULLABLE" },
+    { name = "created_at",       type = "TIMESTAMP", mode = "NULLABLE" },
+    { name = "updated_at",       type = "TIMESTAMP", mode = "NULLABLE" },
+  ])
+}
+
+# ------------------------------------------------------------------
+# Active Monitoring
+# ------------------------------------------------------------------
+resource "google_bigquery_table" "watch_list" {
+  dataset_id = google_bigquery_dataset.amplify.dataset_id
+  table_id   = "watch_list"
+  project    = google_project.amplify.project_id
+
+  schema = jsonencode([
+    { name = "id",                type = "STRING",    mode = "REQUIRED" },
+    { name = "buy_id",           type = "STRING",    mode = "REQUIRED" },
+    { name = "buy_line_id",      type = "STRING",    mode = "REQUIRED" },
+    { name = "spender_id",       type = "STRING",    mode = "NULLABLE" },
+    { name = "spender_name",     type = "STRING",    mode = "NULLABLE" },
+    { name = "station_call_sign", type = "STRING",   mode = "NULLABLE" },
+    { name = "market_name",      type = "STRING",    mode = "NULLABLE" },
+    { name = "flight_start",     type = "DATE",      mode = "NULLABLE" },
+    { name = "flight_end",       type = "DATE",      mode = "NULLABLE" },
+    { name = "is_active",        type = "BOOLEAN",   mode = "NULLABLE" },
+    { name = "created_at",       type = "TIMESTAMP", mode = "NULLABLE" },
+    { name = "updated_at",       type = "TIMESTAMP", mode = "NULLABLE" },
+  ])
+}
+
+# ------------------------------------------------------------------
+# Notifications
+# ------------------------------------------------------------------
+resource "google_bigquery_table" "notifications" {
+  dataset_id = google_bigquery_dataset.amplify.dataset_id
+  table_id   = "notifications"
+  project    = google_project.amplify.project_id
+
+  schema = jsonencode([
+    { name = "id",                   type = "STRING",    mode = "REQUIRED" },
+    { name = "type",                type = "STRING",    mode = "REQUIRED" },
+    { name = "district_id",         type = "STRING",    mode = "NULLABLE" },
+    { name = "subject",             type = "STRING",    mode = "NULLABLE" },
+    { name = "body",                type = "STRING",    mode = "NULLABLE" },
+    { name = "recipients",          type = "STRING",    mode = "REPEATED" },
+    { name = "related_buy_id",      type = "STRING",    mode = "NULLABLE" },
+    { name = "related_creative_id", type = "STRING",    mode = "NULLABLE" },
+    { name = "sent_at",             type = "TIMESTAMP", mode = "NULLABLE" },
+    { name = "created_at",          type = "TIMESTAMP", mode = "NULLABLE" },
+  ])
+}

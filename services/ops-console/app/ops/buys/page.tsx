@@ -114,12 +114,8 @@ export default function BuysPage() {
       header: 'Markets',
       id: 'markets',
       render: (row: Buy) => (
-        <span className={css({ fontSize: '12px' })} title={row.markets || ''}>
-          {row.markets
-            ? row.markets.length > 35
-              ? row.markets.slice(0, 35) + '…'
-              : row.markets
-            : '—'}
+        <span className={css({ fontSize: '12px', whiteSpace: 'normal', wordBreak: 'break-word', lineHeight: '1.4' })}>
+          {row.markets || '—'}
         </span>
       ),
     },

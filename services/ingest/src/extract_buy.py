@@ -196,6 +196,8 @@ async def extract_buy(full_content: str, email_id: str) -> dict:
 
             # Insert buy lines
             for line in buy.get("lines", []):
+                if not line or not isinstance(line, dict):
+                    continue
                 line_id = uuid.uuid4()
                 await conn.execute(
                     """INSERT INTO buy_lines (id, buy_id, station_call_sign, market_name,
@@ -214,7 +216,7 @@ async def extract_buy(full_content: str, email_id: str) -> dict:
                 )
 
                 # Insert weekly breakdown
-                for week in line.get("weekly_breakdown", []):
+                for week in (line.get("weekly_breakdown") or []):
                     await conn.execute(
                         """INSERT INTO buy_line_weeks (id, buy_line_id, week_start, week_end,
                                dollars, spots, created_at)
@@ -228,7 +230,7 @@ async def extract_buy(full_content: str, email_id: str) -> dict:
                     )
 
                 # Insert daypart/rotation detail
-                for dp in line.get("dayparts", []):
+                for dp in (line.get("dayparts") or []):
                     await conn.execute(
                         """INSERT INTO buy_line_dayparts (id, buy_line_id, daypart, program,
                                days, time_start, time_end, rate_per_spot, spots_per_week,

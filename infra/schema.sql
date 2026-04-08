@@ -323,6 +323,7 @@ CREATE TABLE IF NOT EXISTS radar_scans (
 );
 
 CREATE INDEX IF NOT EXISTS idx_radar_items_fcc_filing_id ON radar_items(fcc_filing_id);
+CREATE INDEX IF NOT EXISTS idx_radar_items_matched_buy_id ON radar_items(matched_buy_id) WHERE matched_buy_id IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_radar_scans_started_at ON radar_scans(started_at);
 
 -- ------------------------------------------------------------------

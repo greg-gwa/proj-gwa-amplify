@@ -1,12 +1,37 @@
 """
 Match engine for FCC radar items — fuzzy matches against spenders and buys tables.
+
+Uses rapidfuzz (Jaro-Winkler + token_set_ratio) for Python-side scoring,
+with pg_trgm as a pre-filter to narrow candidates.
 """
 
 import logging
+import re
 from datetime import date, timedelta
 from typing import Optional
 
+from rapidfuzz import fuzz
+from rapidfuzz.distance import JaroWinkler
+
 logger = logging.getLogger(__name__)
+
+# Common suffixes to strip before comparison
+_STRIP_SUFFIXES = [
+    "FOR SENATE", "FOR CONGRESS", "FOR MARYLAND", "FOR GOVERNOR",
+    "FOR HOUSE", "FOR PRESIDENT", "FOR AMERICA", "FOR VIRGINIA",
+    "FOR OHIO", "FOR MICHIGAN", "FOR WISCONSIN", "FOR PENNSYLVANIA",
+    "FOR ARIZONA", "FOR GEORGIA", "FOR NEVADA", "FOR TEXAS",
+    "FOR NORTH CAROLINA", "FOR FLORIDA", "FOR IOWA", "FOR MINNESOTA",
+    "COMMITTEE", "CMTE", "POLITICAL ACTION COMMITTEE",
+    "PAC", "SUPER PAC", "INC", "LLC", "LLP", "CORP", "CORPORATION",
+    "THE", "OF",
+]
+
+# Pre-compiled pattern for suffix stripping
+_SUFFIX_PATTERN = re.compile(
+    r'\b(?:' + '|'.join(re.escape(s) for s in _STRIP_SUFFIXES) + r')\b',
+    re.IGNORECASE,
+)
 
 
 def _normalize(name: str) -> str:
@@ -14,11 +39,38 @@ def _normalize(name: str) -> str:
     return " ".join(name.strip().upper().split())
 
 
+def _normalize_for_fuzzy(name: str) -> str:
+    """Normalize a name for fuzzy comparison: strip common suffixes, punctuation."""
+    n = name.strip().upper()
+    # Remove common suffixes
+    n = _SUFFIX_PATTERN.sub("", n)
+    # Remove punctuation
+    n = re.sub(r"[^\w\s]", "", n)
+    # Collapse whitespace
+    n = " ".join(n.split()).strip()
+    return n
+
+
+def _score_names(name_a: str, name_b: str) -> float:
+    """Combined score: 0.6 * JaroWinkler + 0.4 * token_set_ratio."""
+    norm_a = _normalize_for_fuzzy(name_a)
+    norm_b = _normalize_for_fuzzy(name_b)
+    if not norm_a or not norm_b:
+        return 0.0
+    jw = JaroWinkler.similarity(norm_a, norm_b)
+    tsr = fuzz.token_set_ratio(norm_a, norm_b) / 100.0
+    return 0.6 * jw + 0.4 * tsr
+
+
 async def match_to_spender(conn, advertiser_name: str) -> Optional[dict]:
     """
     Fuzzy match an advertiser name against the spenders table.
-    Uses PostgreSQL similarity() for fuzzy matching (requires pg_trgm extension),
-    falls back to exact normalized match.
+
+    Strategy:
+    1. Check spender_aliases for exact match
+    2. Exact normalized name match
+    3. pg_trgm pre-filter (wide net, similarity > 0.3) → rapidfuzz Python-side scoring
+       Combined score (JaroWinkler + token_set_ratio) >= 0.75 required
 
     Returns dict with id, name, type, party, confidence or None.
     """
@@ -27,7 +79,29 @@ async def match_to_spender(conn, advertiser_name: str) -> Optional[dict]:
 
     normalized = _normalize(advertiser_name)
 
-    # First try exact normalized match
+    # 1. Check aliases table for exact match
+    try:
+        row = await conn.fetchrow(
+            """SELECT sa.spender_id, s.name, s.type, s.party
+               FROM spender_aliases sa
+               JOIN spenders s ON s.id = sa.spender_id
+               WHERE UPPER(TRIM(sa.alias)) = $1
+               LIMIT 1""",
+            normalized,
+        )
+        if row:
+            logger.info(f"Spender alias match: '{advertiser_name}' → '{row['name']}'")
+            return {
+                "id": row["spender_id"],
+                "name": row["name"],
+                "type": row["type"],
+                "party": row["party"],
+                "confidence": 1.0,
+            }
+    except Exception as e:
+        logger.debug(f"Alias table lookup failed (may not exist yet): {e}")
+
+    # 2. Exact normalized match
     row = await conn.fetchrow(
         "SELECT id, name, type, party FROM spenders WHERE UPPER(TRIM(name)) = $1 LIMIT 1",
         normalized,
@@ -42,50 +116,48 @@ async def match_to_spender(conn, advertiser_name: str) -> Optional[dict]:
             "confidence": 1.0,
         }
 
-    # Try LIKE-based partial match (common variations: with/without "Inc", "LLC", "PAC")
-    # Match if the DB name contains the search term or vice versa
-    row = await conn.fetchrow(
-        """SELECT id, name, type, party FROM spenders
-           WHERE UPPER(TRIM(name)) LIKE '%' || $1 || '%'
-              OR $1 LIKE '%' || UPPER(TRIM(name)) || '%'
-           ORDER BY LENGTH(name) ASC
-           LIMIT 1""",
-        normalized,
-    )
-    if row:
-        logger.info(f"Spender partial match: '{advertiser_name}' → '{row['name']}'")
-        return {
-            "id": row["id"],
-            "name": row["name"],
-            "type": row["type"],
-            "party": row["party"],
-            "confidence": 0.8,
-        }
-
-    # Try pg_trgm similarity if available
+    # 3. pg_trgm pre-filter (wide net) → Python-side rapidfuzz scoring
     try:
-        row = await conn.fetchrow(
-            """SELECT id, name, type, party,
-                      similarity(UPPER(TRIM(name)), $1) AS sim
+        candidates = await conn.fetch(
+            """SELECT id, name, type, party
                FROM spenders
-               WHERE similarity(UPPER(TRIM(name)), $1) > 0.4
-               ORDER BY sim DESC
-               LIMIT 1""",
+               WHERE similarity(UPPER(TRIM(name)), $1) > 0.3
+               ORDER BY similarity(UPPER(TRIM(name)), $1) DESC
+               LIMIT 20""",
             normalized,
         )
-        if row:
-            sim = float(row["sim"])
-            logger.info(f"Spender fuzzy match: '{advertiser_name}' → '{row['name']}' (sim={sim:.2f})")
+    except Exception:
+        # pg_trgm not available — fall back to LIKE
+        candidates = await conn.fetch(
+            """SELECT id, name, type, party FROM spenders
+               WHERE UPPER(TRIM(name)) LIKE '%' || $1 || '%'
+                  OR $1 LIKE '%' || UPPER(TRIM(name)) || '%'
+               ORDER BY LENGTH(name) ASC
+               LIMIT 20""",
+            normalized,
+        )
+
+    if candidates:
+        best_row = None
+        best_score = 0.0
+        for cand in candidates:
+            score = _score_names(advertiser_name, cand["name"])
+            if score > best_score:
+                best_score = score
+                best_row = cand
+
+        if best_row and best_score >= 0.75:
+            logger.info(
+                f"Spender fuzzy match: '{advertiser_name}' → '{best_row['name']}' "
+                f"(score={best_score:.3f})"
+            )
             return {
-                "id": row["id"],
-                "name": row["name"],
-                "type": row["type"],
-                "party": row["party"],
-                "confidence": sim,
+                "id": best_row["id"],
+                "name": best_row["name"],
+                "type": best_row["type"],
+                "party": best_row["party"],
+                "confidence": best_score,
             }
-    except Exception as e:
-        # pg_trgm extension may not be available
-        logger.debug(f"Trigram similarity not available: {e}")
 
     logger.info(f"No spender match for: '{advertiser_name}'")
     return None
@@ -98,6 +170,7 @@ async def match_to_buy(
     flight_start: Optional[date],
     flight_end: Optional[date],
     dollars: Optional[float],
+    spender_confidence: float = 0.0,
 ) -> Optional[dict]:
     """
     Match against buys table using 4-point criteria:
@@ -105,6 +178,9 @@ async def match_to_buy(
       2. Same station (via buy_lines)
       3. Date overlap (±3 days)
       4. Dollars within 10%
+
+    Threshold: 3 points normally, or 2 points when spender_confidence >= 0.85
+    AND station matches (spender + station alone is highly indicative).
 
     Returns dict with buy_id, match_points, confidence, or None.
     """
@@ -151,8 +227,10 @@ async def match_to_buy(
         points = 1  # Already matched spender
 
         # Station match (already filtered in query)
+        has_station_match = False
         if station:
             points += 1
+            has_station_match = True
 
         # Date overlap check (±3 days)
         if flight_start and row["flight_start"]:
@@ -180,7 +258,12 @@ async def match_to_buy(
             best_points = points
             best_match = row
 
-    if best_match and best_points >= 2:
+    # Lower threshold: 2 points when high-confidence spender + station match
+    threshold = 3
+    if spender_confidence >= 0.85 and station:
+        threshold = 2
+
+    if best_match and best_points >= threshold:
         confidence = best_points / 4.0
         logger.info(
             f"Buy match: '{spender_name}' @ {station} → buy {best_match['buy_id']} "

@@ -344,6 +344,7 @@ async def _scan_station(conn, fcc: FCCClient, call_sign: str, cutoff: datetime, 
                     flight_start=None,
                     flight_end=None,
                     dollars=None,
+                    spender_confidence=spender_match["confidence"],
                 )
                 if buy_match and buy_match["match_points"] >= 3:
                     status = "matched_to_buy"
@@ -387,6 +388,7 @@ async def _scan_station(conn, fcc: FCCClient, call_sign: str, cutoff: datetime, 
                                 flight_start=flight_start,
                                 flight_end=flight_end,
                                 dollars=total_dollars,
+                                spender_confidence=spender_match["confidence"],
                             )
                             if buy_match and buy_match["match_points"] >= 3:
                                 status = "matched_to_buy"

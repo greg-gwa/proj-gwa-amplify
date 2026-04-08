@@ -3,6 +3,7 @@
 import React, { useEffect, useState, useCallback, useRef } from 'react'
 import { useStyletron } from 'baseui'
 import { Button, KIND, SIZE } from 'baseui/button'
+import { ButtonGroup } from 'baseui/button-group'
 import { Input } from 'baseui/input'
 import { Tag } from 'baseui/tag'
 import { PageHeader } from '@/components/PageHeader'
@@ -11,6 +12,8 @@ import { StatCard } from '@/components/StatCard'
 import { StatusTag } from '@/components/StatusTag'
 import { colors } from '@/theme/customTheme'
 import { formatCurrency, formatDate } from '@/lib/format'
+
+type Mode = 'region' | 'spender' | 'candidate'
 
 interface MarketOption {
   id: string
@@ -22,6 +25,26 @@ interface SelectedMarket {
   id: string
   dma_name: string
   station_count: number
+}
+
+interface SpenderOption {
+  id: string
+  name: string
+  type: string | null
+  party: string | null
+  total_buys: number
+  total_dollars: number
+}
+
+interface CandidateOption {
+  cand_id: string
+  cand_name: string
+  party: string | null
+  office: string | null
+  state: string | null
+  district: string | null
+  total_spenders: number
+  total_dollars: number
 }
 
 interface Monitor {
@@ -54,12 +77,39 @@ interface Pagination {
   totalPages: number
 }
 
+const MODE_LABELS: Record<Mode, string> = {
+  region: 'Region',
+  spender: 'Spender',
+  candidate: 'Candidate',
+}
+
+const MODE_SUBTITLES: Record<Mode, string> = {
+  region: 'Region-based monitoring dashboard — pick markets, see active monitors',
+  spender: 'Spender-based monitoring — pick spenders, see their active monitors',
+  candidate: 'Candidate-based monitoring — pick candidates, see associated monitors',
+}
+
 export default function WatchlistPage() {
   const [css] = useStyletron()
+  const [mode, setMode] = useState<Mode>('region')
+
+  // Region state
   const [selectedMarkets, setSelectedMarkets] = useState<SelectedMarket[]>([])
-  const [loading, setLoading] = useState(true)
   const [marketSearch, setMarketSearch] = useState('')
   const [marketResults, setMarketResults] = useState<MarketOption[]>([])
+
+  // Spender state
+  const [selectedSpenders, setSelectedSpenders] = useState<SpenderOption[]>([])
+  const [spenderSearch, setSpenderSearch] = useState('')
+  const [spenderResults, setSpenderResults] = useState<SpenderOption[]>([])
+
+  // Candidate state
+  const [selectedCandidates, setSelectedCandidates] = useState<CandidateOption[]>([])
+  const [candidateSearch, setCandidateSearch] = useState('')
+  const [candidateResults, setCandidateResults] = useState<CandidateOption[]>([])
+
+  // Common state
+  const [loading, setLoading] = useState(true)
   const [showDropdown, setShowDropdown] = useState(false)
   const [monitors, setMonitors] = useState<Monitor[]>([])
   const [stats, setStats] = useState<MonitorStats>({ total_windows: 0, stations: 0, spenders: 0, active_now: 0 })
@@ -72,7 +122,7 @@ export default function WatchlistPage() {
   const [pagination, setPagination] = useState<Pagination>({ page: 1, limit: 15, total: 0, totalPages: 0 })
   const dropdownRef = useRef<HTMLDivElement>(null)
 
-  // Load initial watchlist config (market IDs)
+  // Load initial watchlist config (market IDs) for region mode
   const fetchConfig = useCallback(() => {
     setLoading(true)
     fetch('/api/watchlist')
@@ -90,29 +140,46 @@ export default function WatchlistPage() {
     fetchConfig()
   }, [fetchConfig])
 
-  // Fetch monitors when selected markets change
-  const fetchMonitors = useCallback((
-    marketIds: string[],
-    p: number,
-    q?: string,
-    sort?: string,
-    dir?: string
-  ) => {
-    if (marketIds.length === 0) {
-      setMonitors([])
-      setStats({ total_windows: 0, stations: 0, spenders: 0, active_now: 0 })
-      setPagination({ page: 1, limit: 15, total: 0, totalPages: 0 })
-      return
-    }
-    setMonitorsLoading(true)
+  // Fetch monitors — adapts query based on mode
+  const fetchMonitors = useCallback((p: number, q?: string, sort?: string, dir?: string) => {
     const params = new URLSearchParams()
     params.set('active', 'true')
-    params.set('market_ids', marketIds.join(','))
     params.set('page', String(p))
     params.set('limit', '15')
     if (q) params.set('search', q)
     if (sort) params.set('sort', sort)
     if (dir) params.set('dir', dir)
+
+    if (mode === 'region') {
+      const ids = selectedMarkets.map(m => m.id)
+      if (ids.length === 0) {
+        setMonitors([])
+        setStats({ total_windows: 0, stations: 0, spenders: 0, active_now: 0 })
+        setPagination({ page: 1, limit: 15, total: 0, totalPages: 0 })
+        return
+      }
+      params.set('market_ids', ids.join(','))
+    } else if (mode === 'spender') {
+      const ids = selectedSpenders.map(s => s.id)
+      if (ids.length === 0) {
+        setMonitors([])
+        setStats({ total_windows: 0, stations: 0, spenders: 0, active_now: 0 })
+        setPagination({ page: 1, limit: 15, total: 0, totalPages: 0 })
+        return
+      }
+      params.set('spender_ids', ids.join(','))
+    } else if (mode === 'candidate') {
+      if (selectedCandidates.length === 0) {
+        setMonitors([])
+        setStats({ total_windows: 0, stations: 0, spenders: 0, active_now: 0 })
+        setPagination({ page: 1, limit: 15, total: 0, totalPages: 0 })
+        return
+      }
+      // Use first selected candidate (single-select for now)
+      params.set('candidate_id', selectedCandidates[0].cand_id)
+    }
+
+    setMonitorsLoading(true)
     fetch(`/api/monitors?${params}`)
       .then(r => r.json())
       .then(data => {
@@ -122,17 +189,18 @@ export default function WatchlistPage() {
       })
       .catch(console.error)
       .finally(() => setMonitorsLoading(false))
-  }, [])
+  }, [mode, selectedMarkets, selectedSpenders, selectedCandidates])
 
   useEffect(() => {
-    const ids = selectedMarkets.map(m => m.id)
-    fetchMonitors(ids, 1, search || undefined, sortBy, sortDir)
+    fetchMonitors(1, search || undefined, sortBy, sortDir)
     setPage(1)
-  }, [selectedMarkets, search, sortBy, sortDir, fetchMonitors])
+  }, [fetchMonitors, search, sortBy, sortDir])
 
-  // Search markets for autocomplete
+  // --- Autocomplete searches ---
+
+  // Market search
   useEffect(() => {
-    if (!marketSearch || marketSearch.length < 2) {
+    if (mode !== 'region' || !marketSearch || marketSearch.length < 2) {
       setMarketResults([])
       return
     }
@@ -142,15 +210,53 @@ export default function WatchlistPage() {
         .then(data => {
           if (data.data) {
             const selectedIds = selectedMarkets.map(m => m.id)
-            setMarketResults(
-              data.data.filter((m: MarketOption) => !selectedIds.includes(m.id))
-            )
+            setMarketResults(data.data.filter((m: MarketOption) => !selectedIds.includes(m.id)))
           }
         })
         .catch(console.error)
     }, 200)
     return () => clearTimeout(timer)
-  }, [marketSearch, selectedMarkets])
+  }, [marketSearch, selectedMarkets, mode])
+
+  // Spender search
+  useEffect(() => {
+    if (mode !== 'spender' || !spenderSearch || spenderSearch.length < 2) {
+      setSpenderResults([])
+      return
+    }
+    const timer = setTimeout(() => {
+      fetch(`/api/spenders/search?q=${encodeURIComponent(spenderSearch)}`)
+        .then(r => r.json())
+        .then(data => {
+          if (data.data) {
+            const selectedIds = selectedSpenders.map(s => s.id)
+            setSpenderResults(data.data.filter((s: SpenderOption) => !selectedIds.includes(s.id)))
+          }
+        })
+        .catch(console.error)
+    }, 200)
+    return () => clearTimeout(timer)
+  }, [spenderSearch, selectedSpenders, mode])
+
+  // Candidate search
+  useEffect(() => {
+    if (mode !== 'candidate' || !candidateSearch || candidateSearch.length < 2) {
+      setCandidateResults([])
+      return
+    }
+    const timer = setTimeout(() => {
+      fetch(`/api/candidates/search?q=${encodeURIComponent(candidateSearch)}`)
+        .then(r => r.json())
+        .then(data => {
+          if (data.data) {
+            const selectedIds = selectedCandidates.map(c => c.cand_id)
+            setCandidateResults(data.data.filter((c: CandidateOption) => !selectedIds.includes(c.cand_id)))
+          }
+        })
+        .catch(console.error)
+    }, 200)
+    return () => clearTimeout(timer)
+  }, [candidateSearch, selectedCandidates, mode])
 
   // Close dropdown on click outside
   useEffect(() => {
@@ -163,11 +269,12 @@ export default function WatchlistPage() {
     return () => document.removeEventListener('mousedown', handler)
   }, [])
 
+  // --- Add/remove handlers ---
+
   const addMarket = async (market: MarketOption) => {
     setSelectedMarkets(prev => [...prev, { id: market.id, dma_name: market.dma_name, station_count: market.station_count }])
     setMarketSearch('')
     setShowDropdown(false)
-    // Persist
     await fetch('/api/watchlist', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -184,6 +291,28 @@ export default function WatchlistPage() {
     })
   }
 
+  const addSpender = (spender: SpenderOption) => {
+    setSelectedSpenders(prev => [...prev, spender])
+    setSpenderSearch('')
+    setShowDropdown(false)
+  }
+
+  const removeSpender = (spenderId: string) => {
+    setSelectedSpenders(prev => prev.filter(s => s.id !== spenderId))
+  }
+
+  const addCandidate = (candidate: CandidateOption) => {
+    setSelectedCandidates(prev => [...prev, candidate])
+    setCandidateSearch('')
+    setShowDropdown(false)
+  }
+
+  const removeCandidate = (candId: string) => {
+    setSelectedCandidates(prev => prev.filter(c => c.cand_id !== candId))
+  }
+
+  // --- Sort/page ---
+
   const handleSort = (columnId: string) => {
     if (sortBy === columnId) {
       setSortDir(d => d === 'asc' ? 'desc' : 'asc')
@@ -195,8 +324,8 @@ export default function WatchlistPage() {
   }
 
   const sortIndicator = (columnId: string) => {
-    if (sortBy !== columnId) return ' ↕'
-    return sortDir === 'asc' ? ' ↑' : ' ↓'
+    if (sortBy !== columnId) return ' \u2195'
+    return sortDir === 'asc' ? ' \u2191' : ' \u2193'
   }
 
   const sortableHeader = (label: string, columnId: string) => (
@@ -210,8 +339,27 @@ export default function WatchlistPage() {
 
   const handlePageChange = (newPage: number) => {
     setPage(newPage)
-    fetchMonitors(selectedMarkets.map(m => m.id), newPage, search || undefined, sortBy, sortDir)
+    fetchMonitors(newPage, search || undefined, sortBy, sortDir)
   }
+
+  // --- Helpers ---
+
+  const hasSelection = () => {
+    if (mode === 'region') return selectedMarkets.length > 0
+    if (mode === 'spender') return selectedSpenders.length > 0
+    if (mode === 'candidate') return selectedCandidates.length > 0
+    return false
+  }
+
+  const partyColor = (party: string | null) => {
+    if (!party) return colors.textMuted
+    const p = party.toUpperCase()
+    if (p.startsWith('DEM') || p === 'DEMOCRAT') return '#2563eb'
+    if (p.startsWith('REP') || p === 'REPUBLICAN') return '#dc2626'
+    return colors.textSecondary
+  }
+
+  // --- Columns ---
 
   const columns = [
     {
@@ -228,7 +376,7 @@ export default function WatchlistPage() {
       width: '160px',
       render: (row: Monitor) => (
         <span className={css({ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', display: 'block' })}>
-          {row.market_name || '—'}
+          {row.market_name || '\u2014'}
         </span>
       ),
     },
@@ -248,7 +396,7 @@ export default function WatchlistPage() {
       width: '160px',
       render: (row: Monitor) => (
         <span className={css({ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', display: 'block', color: colors.textSecondary })}>
-          {row.daypart || '—'}
+          {row.daypart || '\u2014'}
         </span>
       ),
     },
@@ -258,7 +406,7 @@ export default function WatchlistPage() {
       width: '110px',
       render: (row: Monitor) => (
         <span className={css({ color: colors.textSecondary })}>
-          {row.time_start && row.time_end ? `${row.time_start}–${row.time_end}` : '—'}
+          {row.time_start && row.time_end ? `${row.time_start}\u2013${row.time_end}` : '\u2014'}
         </span>
       ),
     },
@@ -269,7 +417,7 @@ export default function WatchlistPage() {
       render: (row: Monitor) => {
         const d = row.days || ''
         const labels: Record<string, string> = {
-          'MTWTF': 'Mon–Fri',
+          'MTWTF': 'Mon\u2013Fri',
           'MTWTFSS': 'Daily',
           'SS': 'Weekends',
           'S': 'Sat',
@@ -277,7 +425,7 @@ export default function WatchlistPage() {
         }
         return (
           <span className={css({ color: colors.textSecondary, fontSize: '12px' })}>
-            {labels[d] || d || '—'}
+            {labels[d] || d || '\u2014'}
           </span>
         )
       },
@@ -289,8 +437,8 @@ export default function WatchlistPage() {
       render: (row: Monitor) => (
         <span className={css({ color: colors.textSecondary, fontSize: '12px' })}>
           {row.flight_start && row.flight_end
-            ? `${formatDate(row.flight_start)} – ${formatDate(row.flight_end)}`
-            : '—'}
+            ? `${formatDate(row.flight_start)} \u2013 ${formatDate(row.flight_end)}`
+            : '\u2014'}
         </span>
       ),
     },
@@ -312,10 +460,285 @@ export default function WatchlistPage() {
     },
   ]
 
+  // --- Render picker section based on mode ---
+
+  const renderPicker = () => {
+    if (mode === 'region') {
+      return (
+        <>
+          <h3 className={css({ fontSize: '15px', fontWeight: 600, color: colors.textPrimary, margin: '0 0 12px' })}>
+            Select Markets
+          </h3>
+
+          {selectedMarkets.length > 0 && (
+            <div className={css({ display: 'flex', flexWrap: 'wrap', gap: '8px', marginBottom: '12px' })}>
+              {selectedMarkets.map((market) => (
+                <Tag
+                  key={market.id}
+                  onActionClick={() => removeMarket(market.id)}
+                  closeable
+                  overrides={{
+                    Root: { style: { backgroundColor: '#1a365d', borderRadius: '6px', paddingLeft: '12px', paddingRight: '4px' } },
+                    Text: { style: { fontSize: '13px', color: '#e2e8f0' } },
+                    Action: { style: { color: '#94a3b8' } },
+                  }}
+                >
+                  {market.dma_name}
+                  <span className={css({ color: '#64748b', marginLeft: '6px', fontSize: '11px' })}>
+                    ({market.station_count})
+                  </span>
+                </Tag>
+              ))}
+            </div>
+          )}
+
+          <div ref={dropdownRef} className={css({ position: 'relative', maxWidth: '480px' })}>
+            <Input
+              value={marketSearch}
+              onChange={(e) => {
+                setMarketSearch((e.target as HTMLInputElement).value)
+                setShowDropdown(true)
+              }}
+              onFocus={() => setShowDropdown(true)}
+              placeholder="Search markets to add (e.g., Washington, Philadelphia)..."
+              size={SIZE.compact}
+              overrides={{ Root: { style: { backgroundColor: colors.bgSecondary } } }}
+            />
+            {showDropdown && marketResults.length > 0 && renderDropdown(
+              marketResults.map(m => ({
+                key: m.id,
+                label: m.dma_name,
+                detail: `${m.station_count} stations`,
+                onSelect: () => addMarket(m),
+              }))
+            )}
+          </div>
+        </>
+      )
+    }
+
+    if (mode === 'spender') {
+      return (
+        <>
+          <h3 className={css({ fontSize: '15px', fontWeight: 600, color: colors.textPrimary, margin: '0 0 12px' })}>
+            Select Spenders
+          </h3>
+
+          {selectedSpenders.length > 0 && (
+            <div className={css({ display: 'flex', flexWrap: 'wrap', gap: '8px', marginBottom: '12px' })}>
+              {selectedSpenders.map((sp) => (
+                <Tag
+                  key={sp.id}
+                  onActionClick={() => removeSpender(sp.id)}
+                  closeable
+                  overrides={{
+                    Root: { style: { backgroundColor: '#1a365d', borderRadius: '6px', paddingLeft: '12px', paddingRight: '4px' } },
+                    Text: { style: { fontSize: '13px', color: '#e2e8f0' } },
+                    Action: { style: { color: '#94a3b8' } },
+                  }}
+                >
+                  {sp.name}
+                  {sp.party && (
+                    <span className={css({ color: partyColor(sp.party), marginLeft: '6px', fontSize: '11px', fontWeight: 600 })}>
+                      ({sp.party})
+                    </span>
+                  )}
+                </Tag>
+              ))}
+            </div>
+          )}
+
+          <div ref={dropdownRef} className={css({ position: 'relative', maxWidth: '480px' })}>
+            <Input
+              value={spenderSearch}
+              onChange={(e) => {
+                setSpenderSearch((e.target as HTMLInputElement).value)
+                setShowDropdown(true)
+              }}
+              onFocus={() => setShowDropdown(true)}
+              placeholder="Search spenders (e.g., Harris Victory Fund, NRSC)..."
+              size={SIZE.compact}
+              overrides={{ Root: { style: { backgroundColor: colors.bgSecondary } } }}
+            />
+            {showDropdown && spenderResults.length > 0 && renderDropdown(
+              spenderResults.map(s => ({
+                key: s.id,
+                label: s.name,
+                detail: `${s.total_buys} buys \u00B7 ${formatCurrency(s.total_dollars)}`,
+                onSelect: () => addSpender(s),
+              }))
+            )}
+          </div>
+        </>
+      )
+    }
+
+    if (mode === 'candidate') {
+      return (
+        <>
+          <h3 className={css({ fontSize: '15px', fontWeight: 600, color: colors.textPrimary, margin: '0 0 12px' })}>
+            Select Candidates
+          </h3>
+
+          {selectedCandidates.length > 0 && (
+            <div className={css({ display: 'flex', flexWrap: 'wrap', gap: '8px', marginBottom: '12px' })}>
+              {selectedCandidates.map((cand) => (
+                <Tag
+                  key={cand.cand_id}
+                  onActionClick={() => removeCandidate(cand.cand_id)}
+                  closeable
+                  overrides={{
+                    Root: { style: { backgroundColor: '#1a365d', borderRadius: '6px', paddingLeft: '12px', paddingRight: '4px' } },
+                    Text: { style: { fontSize: '13px', color: '#e2e8f0' } },
+                    Action: { style: { color: '#94a3b8' } },
+                  }}
+                >
+                  {cand.cand_name}
+                  {cand.party && (
+                    <span className={css({ color: partyColor(cand.party), marginLeft: '6px', fontSize: '11px', fontWeight: 600 })}>
+                      ({cand.party})
+                    </span>
+                  )}
+                  {cand.office && (
+                    <span className={css({ color: '#64748b', marginLeft: '6px', fontSize: '11px' })}>
+                      {cand.office}{cand.state ? ` \u2013 ${cand.state}` : ''}{cand.district ? `-${cand.district}` : ''}
+                    </span>
+                  )}
+                </Tag>
+              ))}
+            </div>
+          )}
+
+          <div ref={dropdownRef} className={css({ position: 'relative', maxWidth: '480px' })}>
+            <Input
+              value={candidateSearch}
+              onChange={(e) => {
+                setCandidateSearch((e.target as HTMLInputElement).value)
+                setShowDropdown(true)
+              }}
+              onFocus={() => setShowDropdown(true)}
+              placeholder="Search candidates (e.g., Harris, Hogan, Kaine)..."
+              size={SIZE.compact}
+              overrides={{ Root: { style: { backgroundColor: colors.bgSecondary } } }}
+            />
+            {showDropdown && candidateResults.length > 0 && renderDropdown(
+              candidateResults.map(c => ({
+                key: c.cand_id,
+                label: c.cand_name,
+                detail: [c.party, c.office, c.state, c.district].filter(Boolean).join(' \u00B7 '),
+                onSelect: () => addCandidate(c),
+              }))
+            )}
+          </div>
+        </>
+      )
+    }
+
+    return null
+  }
+
+  // Shared dropdown renderer
+  const renderDropdown = (items: { key: string; label: string; detail: string; onSelect: () => void }[]) => (
+    <div
+      className={css({
+        position: 'absolute',
+        top: '100%',
+        left: 0,
+        right: 0,
+        zIndex: 100,
+        backgroundColor: colors.bgElevated,
+        border: `1px solid ${colors.border}`,
+        borderRadius: '8px',
+        marginTop: '4px',
+        maxHeight: '240px',
+        overflowY: 'auto',
+        boxShadow: '0 4px 12px rgba(0,0,0,0.2)',
+      })}
+    >
+      {items.map((item) => (
+        <div
+          key={item.key}
+          onClick={item.onSelect}
+          className={css({
+            padding: '10px 14px',
+            cursor: 'pointer',
+            display: 'flex',
+            justifyContent: 'space-between',
+            alignItems: 'center',
+            fontSize: '13px',
+            color: colors.textPrimary,
+            ':hover': { backgroundColor: colors.bgSecondary },
+          })}
+        >
+          <span>{item.label}</span>
+          <span className={css({ color: colors.textMuted, fontSize: '12px' })}>
+            {item.detail}
+          </span>
+        </div>
+      ))}
+    </div>
+  )
+
+  // --- Stat cards based on mode ---
+
+  const renderStats = () => {
+    if (!hasSelection()) return null
+
+    if (mode === 'spender') {
+      // Aggregate from selected spenders
+      const totalSpend = selectedSpenders.reduce((acc, s) => acc + (Number(s.total_dollars) || 0), 0)
+      const totalBuys = selectedSpenders.reduce((acc, s) => acc + (Number(s.total_buys) || 0), 0)
+      return (
+        <div className={css({ display: 'flex', gap: '16px', marginBottom: '24px', flexWrap: 'wrap' })}>
+          <StatCard label="Active Monitors" value={String(Number(stats.active_now))} color={colors.primary} />
+          <StatCard label="Stations" value={String(Number(stats.stations))} />
+          <StatCard label="Total Buys" value={String(totalBuys)} />
+          <StatCard label="Total Spend" value={totalSpend > 0 ? formatCurrency(totalSpend) : '\u2014'} />
+        </div>
+      )
+    }
+
+    if (mode === 'candidate') {
+      const cand = selectedCandidates[0]
+      return (
+        <div className={css({ display: 'flex', gap: '16px', marginBottom: '24px', flexWrap: 'wrap' })}>
+          <StatCard label="Active Monitors" value={String(Number(stats.active_now))} color={colors.primary} />
+          <StatCard label="Stations" value={String(Number(stats.stations))} />
+          <StatCard label="Linked Spenders" value={cand ? String(Number(cand.total_spenders)) : '\u2014'} />
+          <StatCard label="Total Spend" value={cand && Number(cand.total_dollars) > 0 ? formatCurrency(Number(cand.total_dollars)) : '\u2014'} />
+        </div>
+      )
+    }
+
+    // Region mode (default)
+    return (
+      <div className={css({ display: 'flex', gap: '16px', marginBottom: '24px', flexWrap: 'wrap' })}>
+        <StatCard
+          label="Active Monitors"
+          value={String(Number(stats.active_now))}
+          color={colors.primary}
+        />
+        <StatCard label="Stations" value={String(Number(stats.stations))} />
+        <StatCard label="Spenders" value={String(Number(stats.spenders))} />
+        <StatCard
+          label="Total $"
+          value={stats.total_dollars ? formatCurrency(stats.total_dollars) : '\u2014'}
+        />
+      </div>
+    )
+  }
+
+  const emptyMessage = () => {
+    if (mode === 'region') return 'Select markets above to see active monitors'
+    if (mode === 'spender') return 'Select spenders above to see their active monitors'
+    if (mode === 'candidate') return 'Select a candidate above to see associated monitors'
+    return 'No selection'
+  }
+
   if (loading) {
     return (
       <div>
-        <PageHeader title="Watchlist" subtitle="Region-based monitoring dashboard" />
+        <PageHeader title="Watchlist" subtitle="Monitoring dashboard" />
         <p className={css({ color: colors.textMuted })}>Loading...</p>
       </div>
     )
@@ -323,9 +746,51 @@ export default function WatchlistPage() {
 
   return (
     <div>
-      <PageHeader title="Watchlist" subtitle="Region-based monitoring dashboard — pick markets, see active monitors" />
+      <PageHeader title="Watchlist" subtitle={MODE_SUBTITLES[mode]} />
 
-      {/* Region Picker */}
+      {/* Mode Toggle */}
+      <div className={css({ marginBottom: '20px' })}>
+        <ButtonGroup
+          selected={mode === 'region' ? 0 : mode === 'spender' ? 1 : 2}
+          onClick={(_event, index) => {
+            const modes: Mode[] = ['region', 'spender', 'candidate']
+            setMode(modes[index])
+            setSearch('')
+            setSearchInput('')
+            setPage(1)
+          }}
+          size={SIZE.compact}
+          overrides={{
+            Root: {
+              style: {
+                borderRadius: '8px',
+                overflow: 'hidden',
+              },
+            },
+          }}
+        >
+          {(['region', 'spender', 'candidate'] as Mode[]).map((m) => (
+            <Button
+              key={m}
+              kind={mode === m ? KIND.primary : KIND.secondary}
+              overrides={{
+                BaseButton: {
+                  style: {
+                    paddingLeft: '20px',
+                    paddingRight: '20px',
+                    fontSize: '13px',
+                    fontWeight: mode === m ? 600 : 400,
+                  },
+                },
+              }}
+            >
+              {MODE_LABELS[m]}
+            </Button>
+          ))}
+        </ButtonGroup>
+      </div>
+
+      {/* Picker Section */}
       <div
         className={css({
           backgroundColor: colors.bgElevated,
@@ -335,122 +800,14 @@ export default function WatchlistPage() {
           marginBottom: '20px',
         })}
       >
-        <h3 className={css({ fontSize: '15px', fontWeight: 600, color: colors.textPrimary, margin: '0 0 12px' })}>
-          Select Markets
-        </h3>
-
-        {/* Selected market chips */}
-        {selectedMarkets.length > 0 && (
-          <div className={css({ display: 'flex', flexWrap: 'wrap', gap: '8px', marginBottom: '12px' })}>
-            {selectedMarkets.map((market) => (
-              <Tag
-                key={market.id}
-                onActionClick={() => removeMarket(market.id)}
-                closeable
-                overrides={{
-                  Root: {
-                    style: {
-                      backgroundColor: '#1a365d',
-                      borderRadius: '6px',
-                      paddingLeft: '12px',
-                      paddingRight: '4px',
-                    },
-                  },
-                  Text: { style: { fontSize: '13px', color: '#e2e8f0' } },
-                  Action: { style: { color: '#94a3b8' } },
-                }}
-              >
-                {market.dma_name}
-                <span className={css({ color: '#64748b', marginLeft: '6px', fontSize: '11px' })}>
-                  ({market.station_count})
-                </span>
-              </Tag>
-            ))}
-          </div>
-        )}
-
-        {/* Market search input */}
-        <div ref={dropdownRef} className={css({ position: 'relative', maxWidth: '480px' })}>
-          <Input
-            value={marketSearch}
-            onChange={(e) => {
-              setMarketSearch((e.target as HTMLInputElement).value)
-              setShowDropdown(true)
-            }}
-            onFocus={() => setShowDropdown(true)}
-            placeholder="Search markets to add (e.g., Washington, Philadelphia)..."
-            size={SIZE.compact}
-            overrides={{
-              Root: { style: { backgroundColor: colors.bgSecondary } },
-            }}
-          />
-
-          {showDropdown && marketResults.length > 0 && (
-            <div
-              className={css({
-                position: 'absolute',
-                top: '100%',
-                left: 0,
-                right: 0,
-                zIndex: 100,
-                backgroundColor: colors.bgElevated,
-                border: `1px solid ${colors.border}`,
-                borderRadius: '8px',
-                marginTop: '4px',
-                maxHeight: '240px',
-                overflowY: 'auto',
-                boxShadow: '0 4px 12px rgba(0,0,0,0.2)',
-              })}
-            >
-              {marketResults.map((m) => (
-                <div
-                  key={m.id}
-                  onClick={() => addMarket(m)}
-                  className={css({
-                    padding: '10px 14px',
-                    cursor: 'pointer',
-                    display: 'flex',
-                    justifyContent: 'space-between',
-                    alignItems: 'center',
-                    fontSize: '13px',
-                    color: colors.textPrimary,
-                    ':hover': { backgroundColor: colors.bgSecondary },
-                  })}
-                >
-                  <span>{m.dma_name}</span>
-                  <span className={css({ color: colors.textMuted, fontSize: '12px' })}>
-                    {m.station_count} stations
-                  </span>
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
+        {renderPicker()}
       </div>
 
       {/* Stat cards */}
-      <div className={css({ display: 'flex', gap: '16px', marginBottom: '24px', flexWrap: 'wrap' })}>
-        <StatCard
-          label="Active Monitors"
-          value={selectedMarkets.length > 0 ? String(Number(stats.active_now)) : '—'}
-          color={selectedMarkets.length > 0 ? colors.primary : undefined}
-        />
-        <StatCard
-          label="Stations"
-          value={selectedMarkets.length > 0 ? String(Number(stats.stations)) : '—'}
-        />
-        <StatCard
-          label="Spenders"
-          value={selectedMarkets.length > 0 ? String(Number(stats.spenders)) : '—'}
-        />
-        <StatCard
-          label="Total $"
-          value={selectedMarkets.length > 0 && stats.total_dollars ? formatCurrency(stats.total_dollars) : '—'}
-        />
-      </div>
+      {renderStats()}
 
       {/* Monitors table */}
-      {selectedMarkets.length === 0 ? (
+      {!hasSelection() ? (
         <div
           className={css({
             backgroundColor: colors.bgElevated,
@@ -460,12 +817,16 @@ export default function WatchlistPage() {
             textAlign: 'center',
           })}
         >
-          <div className={css({ fontSize: '32px', marginBottom: '12px' })}>👁</div>
+          <div className={css({ fontSize: '32px', marginBottom: '12px' })}>
+            {mode === 'region' ? '\uD83D\uDC41' : mode === 'spender' ? '\u25C9' : '\uD83C\uDFDB'}
+          </div>
           <div className={css({ fontSize: '16px', fontWeight: 600, color: colors.textPrimary, marginBottom: '8px' })}>
-            Select markets above to see active monitors
+            {emptyMessage()}
           </div>
           <div className={css({ fontSize: '13px', color: colors.textMuted })}>
-            Search and add DMA markets to filter the 7,699+ active monitoring windows
+            {mode === 'region' && 'Search and add DMA markets to filter the 7,699+ active monitoring windows'}
+            {mode === 'spender' && 'Search for spenders by name to view their active monitoring windows'}
+            {mode === 'candidate' && 'Search for candidates to view monitors for all their linked committees'}
           </div>
         </div>
       ) : (
@@ -481,9 +842,7 @@ export default function WatchlistPage() {
                 }}
                 placeholder="Search spender or station..."
                 size={SIZE.compact}
-                overrides={{
-                  Root: { style: { backgroundColor: colors.bgElevated } },
-                }}
+                overrides={{ Root: { style: { backgroundColor: colors.bgElevated } } }}
               />
             </div>
             <Button kind={KIND.secondary} size={SIZE.compact} onClick={() => setSearch(searchInput)}>
@@ -500,7 +859,7 @@ export default function WatchlistPage() {
             data={monitors}
             columns={columns}
             loading={monitorsLoading}
-            emptyMessage="No active monitors for selected markets"
+            emptyMessage="No active monitors for current selection"
           />
 
           {/* Pagination */}
@@ -515,7 +874,7 @@ export default function WatchlistPage() {
               })}
             >
               <span className={css({ fontSize: '13px', color: colors.textMuted })}>
-                Showing {((page - 1) * pagination.limit) + 1}–{Math.min(page * pagination.limit, pagination.total)} of {pagination.total.toLocaleString()}
+                Showing {((page - 1) * pagination.limit) + 1}\u2013{Math.min(page * pagination.limit, pagination.total)} of {pagination.total.toLocaleString()}
               </span>
               <div className={css({ display: 'flex', gap: '4px' })}>
                 <Button
@@ -524,7 +883,7 @@ export default function WatchlistPage() {
                   disabled={page <= 1}
                   onClick={() => handlePageChange(page - 1)}
                 >
-                  ← Prev
+                  \u2190 Prev
                 </Button>
                 <span
                   className={css({
@@ -540,7 +899,7 @@ export default function WatchlistPage() {
                   disabled={page >= pagination.totalPages}
                   onClick={() => handlePageChange(page + 1)}
                 >
-                  Next →
+                  Next \u2192
                 </Button>
               </div>
             </div>

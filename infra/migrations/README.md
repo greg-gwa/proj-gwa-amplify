@@ -26,3 +26,4 @@ asyncio.run(run())
 |------|------|--------|
 | Initial | `infra/schema.sql` | ✅ Applied |
 | 2026-04-07 | `2026-04-07-dayparts-and-indexes.sql` | ✅ Applied |
+| 2026-04-08 | `2026-04-08-spender-aliases.sql` | Pending |

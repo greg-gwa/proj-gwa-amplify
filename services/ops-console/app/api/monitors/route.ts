@@ -12,6 +12,10 @@ export async function GET(request: NextRequest) {
     const marketIds = searchParams.get('market_ids')
       ? searchParams.get('market_ids')!.split(',').filter(Boolean)
       : []
+    const spenderIds = searchParams.get('spender_ids')
+      ? searchParams.get('spender_ids')!.split(',').filter(Boolean)
+      : []
+    const candidateId = searchParams.get('candidate_id')
     const searchQ = searchParams.get('search')
     const sortBy = searchParams.get('sort') || 'station_call_sign'
     const sortDir = searchParams.get('dir') === 'desc' ? 'DESC' : 'ASC'
@@ -46,6 +50,24 @@ export async function GET(request: NextRequest) {
     if (marketIds.length > 0) {
       conditions.push(`m.market_id = ANY($${idx}::uuid[])`)
       params.push(marketIds)
+      idx++
+    }
+
+    // Filter by spender IDs (look up names from spenders table)
+    if (spenderIds.length > 0) {
+      conditions.push(`m.spender_name IN (SELECT name FROM spenders WHERE id = ANY($${idx}::uuid[]))`)
+      params.push(spenderIds)
+      idx++
+    }
+
+    // Filter by candidate ID (through FEC linkage: fec_candidates → fec_committees → spenders)
+    if (candidateId) {
+      conditions.push(`m.spender_name IN (
+        SELECT s.name FROM spenders s
+        JOIN fec_committees fc ON fc.cmte_id = s.fec_id
+        WHERE fc.cand_id = $${idx}
+      )`)
+      params.push(candidateId)
       idx++
     }
 
@@ -114,6 +136,22 @@ export async function GET(request: NextRequest) {
     } else if (marketId) {
       statsConditions.push(`market_id = $${sIdx}::uuid`)
       statsParams.push(marketId)
+      sIdx++
+    }
+
+    if (spenderIds.length > 0) {
+      statsConditions.push(`spender_name IN (SELECT name FROM spenders WHERE id = ANY($${sIdx}::uuid[]))`)
+      statsParams.push(spenderIds)
+      sIdx++
+    }
+
+    if (candidateId) {
+      statsConditions.push(`spender_name IN (
+        SELECT s.name FROM spenders s
+        JOIN fec_committees fc ON fc.cmte_id = s.fec_id
+        WHERE fc.cand_id = $${sIdx}
+      )`)
+      statsParams.push(candidateId)
       sIdx++
     }
 

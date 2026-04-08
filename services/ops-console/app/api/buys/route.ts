@@ -47,6 +47,8 @@ export async function GET(request: NextRequest) {
               b.total_dollars, b.extraction_confidence, b.status,
               b.created_at::TEXT as created_at,
               (SELECT COUNT(*) FROM buy_lines bl WHERE bl.buy_id = b.id) as stations_count,
+              (SELECT string_agg(DISTINCT bl2.market_name, ', ' ORDER BY bl2.market_name)
+               FROM buy_lines bl2 WHERE bl2.buy_id = b.id AND bl2.market_name IS NOT NULL) as markets,
               (SELECT r.filing_url FROM radar_items r
                WHERE r.matched_buy_id = b.id AND r.filing_url IS NOT NULL
                  AND r.document_type IN ('CONTRACT', 'ORDER')

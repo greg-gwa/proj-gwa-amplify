@@ -23,6 +23,7 @@ interface Buy {
   status: string
   created_at: string
   stations_count: number
+  markets: string | null
   fcc_filing_url: string | null
   fcc_match_count: number
 }
@@ -110,10 +111,23 @@ export default function BuysPage() {
         `${formatDate(row.flight_start)} – ${formatDate(row.flight_end)}`,
     },
     {
-      header: 'Stations',
+      header: 'Markets',
+      id: 'markets',
+      render: (row: Buy) => (
+        <span className={css({ fontSize: '12px' })} title={row.markets || ''}>
+          {row.markets
+            ? row.markets.length > 35
+              ? row.markets.slice(0, 35) + '…'
+              : row.markets
+            : '—'}
+        </span>
+      ),
+    },
+    {
+      header: 'Stns',
       id: 'stations',
       render: (row: Buy) => row.stations_count ?? 0,
-      width: '80px',
+      width: '50px',
     },
     {
       header: 'Total',

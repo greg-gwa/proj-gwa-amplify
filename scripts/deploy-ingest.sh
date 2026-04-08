@@ -4,15 +4,12 @@ set -euo pipefail
 PROJECT=proj-amplify
 REGION=us-central1
 REPO="${REGION}-docker.pkg.dev/${PROJECT}/amplify-app"
-IMAGE="${REPO}/ingest:latest"
+IMAGE="${REPO}/amplify-ingest:latest"
 SERVICE_DIR="$(dirname "$0")/../services/ingest"
 
-echo "=== Building ingest image ==="
-docker build --platform linux/amd64 -t "$IMAGE" "$SERVICE_DIR"
-
-echo ""
-echo "=== Pushing to Artifact Registry ==="
-docker push "$IMAGE"
+echo "=== Building ingest image (Cloud Build) ==="
+cd "$SERVICE_DIR"
+gcloud builds submit --tag "$IMAGE" --project="$PROJECT"
 
 echo ""
 echo "=== Deploying to Cloud Run ==="
@@ -31,7 +28,8 @@ gcloud run deploy amplify-ingest \
   --no-cpu-throttling \
   --set-env-vars="RAW_BUCKET=amplify-raw-emails,DATABASE_URL=postgresql://amplify:ZcLiQ5iT8DplSKtwlHBmeAzHJoqIydyH@/amplify?host=/cloudsql/${PROJECT}:${REGION}:amplify-db" \
   --set-secrets="ANTHROPIC_API_KEY=anthropic-api-key:latest,MAILGUN_API_KEY=mailgun-api-key:latest" \
-  --add-cloudsql-instances="${PROJECT}:${REGION}:amplify-db"
+  --add-cloudsql-instances="${PROJECT}:${REGION}:amplify-db" \
+  --quiet
 
 echo ""
 echo "=== Done! ==="

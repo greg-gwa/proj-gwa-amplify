@@ -36,13 +36,29 @@ def parse_time(time_str: str) -> tuple[str, str] | None:
     # Try to split on dash
     parts = t.split("-")
     if len(parts) != 2:
-        # Try to extract from daypart description
         return None
 
-    def convert(p):
+    # Determine AM/PM context: if only one part has a suffix, it applies to both.
+    # e.g., "8-830pm" means 8pm-8:30pm, "11a-12p" means 11am-12pm
+    start_raw, end_raw = parts[0].strip(), parts[1].strip()
+
+    start_has_pm = "P" in start_raw
+    start_has_am = "A" in start_raw
+    end_has_pm = "P" in end_raw
+    end_has_am = "A" in end_raw
+
+    # If start has no AM/PM suffix, inherit from end
+    # (e.g., "8-830pm" → start is also PM; "11-12p" → start is also PM unless explicitly AM)
+    if not start_has_pm and not start_has_am:
+        if end_has_pm:
+            start_has_pm = True
+        elif end_has_am:
+            start_has_am = True
+
+    def convert(p, forced_pm=False, forced_am=False):
         p = p.strip()
-        is_pm = "P" in p
-        is_am = "A" in p
+        is_pm = "P" in p or forced_pm
+        is_am = "A" in p or forced_am
         p = p.replace("A", "").replace("P", "").replace("M", "")
 
         if not p:
@@ -72,34 +88,60 @@ def parse_time(time_str: str) -> tuple[str, str] | None:
 
         return f"{h:02d}:{m:02d}"
 
-    start = convert(parts[0])
-    end = convert(parts[1])
+    start = convert(start_raw, forced_pm=start_has_pm and not ("P" in start_raw), forced_am=start_has_am and not ("A" in start_raw))
+    end = convert(end_raw)
 
     if start and end:
+        # Sanity check: if end < start, we probably mis-parsed AM/PM
+        # e.g., "11a-12p" → 11:00, 12:00 is fine
+        # "8-830pm" → should be 20:00-20:30, not 08:00-20:30
+        if end < start and not (start_has_am or "A" in start_raw):
+            # Start was probably PM too
+            sh = int(start[:2])
+            if sh < 12:
+                start = f"{sh + 12:02d}:{start[3:]}"
         return (start, end)
     return None
 
 
 def parse_days(days_str: str) -> str:
-    """Normalize day strings like 'M-F', 'MTWTF--', 'Sa', 'Su' etc."""
+    """Normalize day strings like 'M-F', 'M-WTF--', 'MTWTF--', 'Sa', 'Su' etc.
+    
+    WideOrbit format uses 7 positional slots: M T W T F S S
+    where '-' means that day is excluded.
+    e.g., 'M-WTF--' = Mon, -, Wed, Thu, Fri, -, - = Mon/Wed/Thu/Fri (no Tuesday)
+         'MTWTF--' = Mon, Tue, Wed, Thu, Fri, -, - = all weekdays
+         '-----S-' = Sat only
+         '------S' = Sun only
+    """
     if not days_str:
         return "MTWTF"  # default to weekdays
 
     d = days_str.strip().upper()
 
+    # Common shorthand
     if d in ("M-F", "MON-FRI", "WEEKDAYS"):
         return "MTWTF"
     if d in ("SA", "SAT", "SATURDAY"):
         return "S"
     if d in ("SU", "SUN", "SUNDAY"):
-        return "U"
+        return "Su"
     if d in ("M-SU", "MON-SUN", "DAILY"):
-        return "MTWTFSU"
+        return "MTWTFSSu"
 
-    # Parse MTWTF-- style
+    # WideOrbit 7-slot positional format (e.g., "M-WTF--", "MTWTFSS", "-----S-")
+    slot_labels = ["M", "T", "W", "T", "F", "S", "Su"]
+    if len(d) == 7:
+        result = ""
+        for i, c in enumerate(d):
+            if c != "-":
+                result += slot_labels[i]
+        return result or "MTWTF"
+
+    # Fallback: extract known day letters
     result = ""
     for c in d:
-        if c in "MTWTFSU" and c not in "-":
+        if c in "MTWFS" and c != "-":
             result += c
     return result or "MTWTF"
 

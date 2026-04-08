@@ -46,7 +46,15 @@ export async function GET(request: NextRequest) {
               b.flight_end::TEXT as flight_end,
               b.total_dollars, b.extraction_confidence, b.status,
               b.created_at::TEXT as created_at,
-              (SELECT COUNT(*) FROM buy_lines bl WHERE bl.buy_id = b.id) as stations_count
+              (SELECT COUNT(*) FROM buy_lines bl WHERE bl.buy_id = b.id) as stations_count,
+              (SELECT r.filing_url FROM radar_items r
+               WHERE r.matched_buy_id = b.id AND r.filing_url IS NOT NULL
+                 AND r.document_type IN ('CONTRACT', 'ORDER')
+               ORDER BY r.total_dollars DESC NULLS LAST
+               LIMIT 1) as fcc_filing_url,
+              (SELECT COUNT(*) FROM radar_items r
+               WHERE r.matched_buy_id = b.id
+                 AND r.document_type IN ('CONTRACT', 'ORDER')) as fcc_match_count
        FROM buys b
        ${where}
        ORDER BY b.created_at DESC

@@ -12,7 +12,11 @@ logger = logging.getLogger(__name__)
 
 
 def parse_time(time_str: str):
-    """Parse time strings like '7a-730a', '10p-1030p' into (HH:MM, HH:MM)."""
+    """Parse time strings like '7a-730a', '10p-1030p', '8-830pm' into (HH:MM, HH:MM).
+    
+    If only the end time has an AM/PM suffix, the start time inherits it.
+    e.g., '8-830pm' → 20:00-20:30 (not 08:00-20:30)
+    """
     if not time_str:
         return None
     t = time_str.strip().upper().replace(" ", "")
@@ -20,10 +24,24 @@ def parse_time(time_str: str):
     if len(parts) != 2:
         return None
 
-    def convert(p):
+    start_raw, end_raw = parts[0].strip(), parts[1].strip()
+
+    start_has_pm = "P" in start_raw
+    start_has_am = "A" in start_raw
+    end_has_pm = "P" in end_raw
+    end_has_am = "A" in end_raw
+
+    # If start has no AM/PM suffix, inherit from end
+    if not start_has_pm and not start_has_am:
+        if end_has_pm:
+            start_has_pm = True
+        elif end_has_am:
+            start_has_am = True
+
+    def convert(p, forced_pm=False, forced_am=False):
         p = p.strip()
-        is_pm = "P" in p
-        is_am = "A" in p
+        is_pm = "P" in p or forced_pm
+        is_am = "A" in p or forced_am
         p = p.replace("A", "").replace("P", "").replace("M", "")
         if not p:
             return None
@@ -47,12 +65,29 @@ def parse_time(time_str: str):
             h = 0
         return f"{h:02d}:{m:02d}"
 
-    start = convert(parts[0])
-    end = convert(parts[1])
-    return (start, end) if start and end else None
+    start = convert(start_raw, forced_pm=start_has_pm and "P" not in start_raw, forced_am=start_has_am and "A" not in start_raw)
+    end = convert(end_raw)
+
+    if start and end:
+        # Sanity: if end < start and start wasn't explicitly AM, start is probably PM too
+        if end < start and not (start_has_am or "A" in start_raw):
+            sh = int(start[:2])
+            if sh < 12:
+                start = f"{sh + 12:02d}:{start[3:]}"
+        return (start, end)
+    return None
 
 
 def parse_days(days_str: str) -> str:
+    """Normalize day strings. Handles WideOrbit 7-slot positional format.
+    
+    WideOrbit uses 7 positional slots: M T W T F S S
+    where '-' means that day is excluded.
+    e.g., 'M-WTF--' = Mon, skip Tue, Wed, Thu, Fri, skip Sat, skip Sun
+         'MTWTF--' = all weekdays
+         '-----S-' = Sat only
+         '------S' = Sun only
+    """
     if not days_str:
         return "MTWTF"
     d = days_str.strip().upper()
@@ -61,10 +96,23 @@ def parse_days(days_str: str) -> str:
     if d in ("SA", "SAT", "SATURDAY"):
         return "S"
     if d in ("SU", "SUN", "SUNDAY"):
-        return "U"
+        return "Su"
+    if d in ("M-SU", "MON-SUN", "DAILY"):
+        return "MTWTFSSu"
+
+    # WideOrbit 7-slot positional format
+    slot_labels = ["M", "T", "W", "T", "F", "S", "Su"]
+    if len(d) == 7:
+        result = ""
+        for i, c in enumerate(d):
+            if c != "-":
+                result += slot_labels[i]
+        return result or "MTWTF"
+
+    # Fallback: extract known day letters
     result = ""
     for c in d:
-        if c in "MTWTFSU" and c != "-":
+        if c in "MTWFS" and c != "-":
             result += c
     return result or "MTWTF"
 

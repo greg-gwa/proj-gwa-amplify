@@ -27,7 +27,7 @@ interface ScanConfig {
 export default function ScannerPage() {
   const [css] = useStyletron()
   const [scans, setScans] = useState<RecentScan[]>([])
-  const [config, setConfig] = useState<ScanConfig>({ scan_interval_hours: 1, lookback_hours: 6 })
+  const [config, setConfig] = useState<ScanConfig>({ scan_interval_hours: 4, lookback_hours: 6 })
   const [loading, setLoading] = useState(true)
   const [scanning, setScanning] = useState(false)
   const [scanMsg, setScanMsg] = useState<string | null>(null)

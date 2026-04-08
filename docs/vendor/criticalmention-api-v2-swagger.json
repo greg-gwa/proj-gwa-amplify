@@ -1,0 +1,1357 @@
+{
+    "swagger": "2.0",
+    "info": {
+        "title": "Critical Mention API Documentation",
+        "description": "## Introduction\n\nCritical Mention provides tools to search, watch video, edit, and analyze every spoken word from the world's largest global broadcast capture system. Television and radio data (including metadata, audience data, ad equivalency, and entity mark up) immediately syncs with 2,000 global broadcast sources to add 40 hours of viewable content every 60 seconds for seamless integration of the world's most persuasive medium: television. Critical Mention customers are able to constantly monitor their exposure, ensuring their message stays on-track.<br>System enablers and programmers can take advantage of Critical Mention's functionality by using our API, making calls from our system and integrating the data within their own. Interested? Here's an example of what you can do with our API:\n\n1.  Programmatically retrieve results which match your keyword searches from our 2,000 broadcast sources\n2.  Integrate our broadcast database results into your site, allowing your customers to seamlessly access Critical Mention's rich data set\n3.  See your data visualized by using our analytic tools and checking for patterns. Charts can be exported for local access\n4.  Create and set alerts to notify you of new mentions on your keyword searches\n5. \n\nAll this can be done programmatically by including our API calls into the architecture of your system and then displaying or using the results.\n\n## Issuing API calls\n\nAPI calls can be issued in different ways. The environment from which you issue the API affects its syntax. You can issue the API calls from:\n\n1.  Your preferred programming language\n2.  An HTTP utility such as cURL\n\nTo specify an API from the command line you must explicitly include the API's syntax along with all the desired parameters and values:\n\n1.  curl \"https://staging-partner.criticalmention.com/allmedia/session\" -d \"username=name&password=XXXX\"\n\n## Boolean Searching\n\nBoolean queries help construct your search. Boolean queries use operands to refine your search, searching explicitly for certain items while excluding others. Some of the major operands include the words AND, OR, NOT, the plus sign +, minus sign -, tilde ~, parentheses (), double quotes \" \", and the asterisk * and question mark ? wildcards:\n\n1.  Use + to include terms: +cars +chevy +1957 will find cars AND chevy AND 1957\n2.  Use - to exclude terms: +cars +chevy -1957 will find cars AND chevy AND NOT 1957\n3.  Use double quotes to find words that occur together: \"Chevy trucks\"\n4.  Add ~ at the end for optional distance between words: \"Chevy trucks\"~10 - will find the words Chevy and trucks within ten words of each other\n5.  Use ( ) to group terms: +(chevy vehicles) -(gas mileage)\n6.  Use the wildcard \\* to find word stems: chev\\* will find \"chevy\", \"chevrolet\"\n7.  Use the wildcard ? to search for spelling variations: cheve??? - will find \"chevette\" and \"chevelle\"\n\n## Authenticating to the system\n\nEach partner gets their own Critical Mention client ID and password which creates and secures your access, allowing you to make requests into the Critical Mention system.<br>To obtain a user access token, issue a cURL request with your user ID and password as in this example:\n\n1.  curl https://staging-partner.criticalmention.com/allmedia/session -d \"username=name&password=xxxx\"\n\nThe following is an example of an access token:\n\n1.  {... \"id\": \"ce8685f1-5427-4148-afd1-22e985cd387e\"}\n\nTo use this token, place it in the authorization header in any API calls you make:\n\n1.  curl \"https://staging-partner.criticalmention.com/allmedia/channel\" -H \"Authorization:ce8685f1-5427-4148-afd1-22e985cd387e\"\n\n**Note**: It's not necessary to use your authorization token when using this API testing interface; if you are currently logged into Critical Mention, your credentials are automatically picked up from your login session.",
+        "version": "4.12",
+        "dateUpdated": "03-30-2026"
+    },
+    "host": "app.criticalmention.com",
+    "basePath": "/allmedia",
+    "schemes": [
+			"https"
+    ],
+	"consumes": [
+		"application/json",
+		"text/plain"
+	],
+    "produces": [
+        "application/json"
+    ],
+    "paths": {
+		"/channel": {
+			"get": {
+				"tags": ["Channel"],
+				"summary": "Returns a list of available channels",
+				"description": "Returns a list of available channels. You can limit the results by broadcast type or by filtering out only active or inactive channels.",
+				"operationId": "channel_get",
+				"parameters": [
+					{
+						"name": "active",
+						"type": "boolean",
+						"in": "query",
+						"description": "Boolean. Turns a specific function on or off. Values are:\n* false\n* true\n\n",
+						"required": false
+					},
+					{
+						"name": "broadcastType",
+						"type": "string",
+						"in": "query",
+						"description": "The type of broadcast, which equates to the network and market. Can be one of the following:\n* Canada\n* Canada ( French )\n* Independent / Other\n* International\n* National Broadcast Networks\n* National Cable\n* Radio Canada\n* UK Radio\n* United Kingdom\n* US Radio\n\n",
+						"required": false
+					}
+				],
+				"responses": {
+					"200": {
+						"description": "Success",
+						"schema": {
+							"$ref": "ChannelGetSuccess"
+						}
+					}
+				}
+			}
+		},
+		"/channel/{id}": {
+			"get": {
+				"tags": ["Channel"],
+				"summary": "Returns details of a channel",
+				"description": "Returns details of a channel.",
+				"operationId": "channel_id_get",
+				"parameters": [
+					{
+						"name": "id",
+						"type": "integer",
+						"format": "int32",
+						"in": "path",
+						"description": "The unique channel ID.",
+						"required": true
+					}
+
+				],
+				"responses": {
+					"200": {
+						"description": "Success",
+						"schema": {
+							"$ref": "ChannelIdGetSuccess"
+						}
+					}
+				}
+			}
+		},
+		"/channel/channelMarkets": {
+			"get": {
+				"tags": ["Channel"],
+				"summary": "Lists the channels and their respective markets",
+				"description": "Lists the channels and their respective markets.",
+				"operationId": "channel_channelmarkets_get",
+				"parameters": [{
+					"name": "mediaType",
+					"type": "string",
+					"format": "string",
+					"in": "query",
+					"description": "limits the search results to the chosen criteria. Values: \n* tv\n* radio\n\n",
+					"required": false
+				}],
+				"responses": {
+					"200": {
+						"description": "Success",
+						"schema": {
+							"type": "array"
+						}
+					}
+				}
+			}
+		},
+		"/clip": {
+			"get": {
+				"tags": ["Clip"],
+				"summary": "Returns a list of clips",
+				"description": "Returns a list of clips",
+				"operationId": "clip_get",
+				"parameters": [
+					{
+					    "name": "limit",
+						"type": "integer",
+						"format": "int32",
+						"in": "query",
+						"description": "The number of clips to fetch. Default batch number is 10.",
+						"required": false
+					},
+					{
+					    "name": "page",
+						"type": "integer",
+						"format": "int32",
+						"in": "query",
+						"description": "The page number to fetch. Default page number is 1.",
+						"required": false
+					},
+					{
+						"name": "sortBy",
+						"type": "string",
+						"in": "query",
+						"description": "The column to sort by. Default sort column is dateCreated. Options:\n* dateCreated - Date and time a clip was created.\n* lastUpdated - Date and time a clip was last updated.\n* provider - Provider of the content.\n* title - Title of the content.\n* name - User given name for the clip.\n\n",
+						"required": false
+					},
+					{
+						"name": "ascdesc",
+						"type": "string",
+						"in": "query",
+						"description": "The order of the results, descending by default. Options:\n* asc - ascending\n* desc - descending\n\n",
+						"required": false
+					},
+					{
+						"name": "keyword",
+						"type": "string",
+						"in": "query",
+						"description": "Approximate name of the provider, program title, or article title. The API will try head and tail match with the given string.",
+						"required": false
+					},
+					{
+						"name": "name",
+						"type": "string",
+						"in": "query",
+						"description": "Approximate name of the clip. The API will try head and tail match with the given string.",
+						"required": false
+					},
+					{
+						"name": "mediaType",
+						"type": "string",
+						"in": "query",
+						"description": "Media type is either tv, radio, news, or twitter.",
+						"required": false
+					},
+					{
+						"name": "archive",
+						"type": "integer",
+						"format": "int32",
+						"in": "query",
+						"description": "Boolean flag for requesting archived and non-archived clips. If archive is unspecified, both archived and non-archived clips are returned. Options:\n* 1 - Get archived clips only\n* 0 - Get non-archived clips only\n\n",
+						"required": false
+					}
+				],
+                "responses": {
+                    "200": {
+                        "description": "Success",
+                        "schema": {
+                            "$ref": "clipArchiveListGetSuccess"
+                        }
+                    }
+                }
+			}
+		},
+		"/clip/{id}": {
+			"get": {
+				"tags": ["Clip"],
+				"summary": "Returns the details of a clip.",
+				"description": "Returns the details of a clip.",
+				"operationId": "clip_id_get",
+				"parameters": [
+					{
+						"name": "id",
+						"type": "integer",
+						"format": "int32",
+						"in": "path",
+						"description": "The ID of the Clip to fetch.",
+						"required": true
+					}, {
+					"name": "highlightText",
+					"type": "boolean",
+					"enum": [true, false],
+					"in": "formData",
+					"description": "Option to perform keyword highlighting on clip text.",
+					"required": false
+					}
+				],
+				"responses": {
+					"200": {
+						"description": "Success",
+						"schema": {
+							"$ref": "ClipGetSuccess"
+						}
+					}
+				}
+			},
+			"put": {
+				"tags": ["Clip"],
+				"summary": "Updates a clip.",
+				"description": "Updates an existing clip.",
+				"operationId": "clip_put",
+			        "parameters": [
+					{
+						"name": "id",
+						"type": "integer",
+						"format": "int32",
+						"in": "path",
+						"description": "The ID of the clip to update.",
+						"required": true
+					},
+					{
+						"name": "name",
+						"type": "string",
+						"format": "string",
+						"in": "formData",
+						"description": "The name you assign the clip.",
+						"required": false
+					},
+					{
+						"name": "thumbnailTimestamp",
+						"type": "string",
+						"in": "formData",
+						"description": "Custom thumbnail timestamp of a clip in yyyymmddhhMMss format.",
+						"required": false
+					},
+					{
+						"name": "startSecondMicro",
+						"type": "string",
+						"in": "formData",
+						"description": "The starting point of the clip to be updated. Uses the UNIX timestamp format. Example: 1379447855.",
+						"required": false
+					},
+					{
+						"name": "endSecondMicro",
+						"type": "string",
+						"in": "formData",
+						"description": "The starting point of the clip to be updated. Uses the UNIX timestamp format. Example: 1379447921.",
+						"required": false
+					},
+					{
+						"name": "archive",
+						"type": "integer",
+						"format": "int32",
+						"in": "formData",
+						"description": "Archive a clip to the cloud. Set to 1 to archive.",
+						"required": false
+					}, {
+						"name": "highlightText",
+						"type": "boolean",
+						"enum": [true, false],
+						"in": "formData",
+						"description": "Option to perform keyword highlighting on clip text.",
+						"required": false
+					}
+				],
+				"responses": {
+					"200": {
+						"description": "Success",
+						"schema": {
+							"$ref": "ClipPutSuccess"
+						}
+					}
+				}
+			},
+			"delete": {
+				"tags": ["Clip"],
+				"summary": "",
+				"description": "Deletes a saved clip. This is a hard delete of a clip ID which permanently deletes the clip, and it cannot be recovered. If you delete that clip id then later try and access it in the URL as a parameter, the system will not recognize it and return an error.",
+				"operationId": "clip_delete",
+				"parameters": [
+					{
+						"name": "id",
+						"type": "integer",
+						"format": "int32",
+						"in": "path",
+						"description": "The ID of the clip to delete.",
+						"required": true
+					}
+				],
+				"responses": {
+					"200": {
+						"description": "Success",
+						"schema": {
+							"$ref": "ClipDeleteSuccess"
+						}
+					}
+				}
+			}
+		},
+		"/clip/{id}/thumbnail": {
+			"get": {
+				"tags": ["Clip"],
+				"summary": "Returns a reference to the clip's thumbnail",
+				"description": "Returns a reference to the clip's thumbnail",
+				"operationId": "clip_thumbnail",
+				"parameters": [
+					{
+						"name": "id",
+						"type": "integer",
+						"format": "int32",
+						"in": "path",
+						"description": "The ID of the clip to fetch",
+						"required": true
+					}
+				],
+				"responses": {
+					"200": {
+						"description": "Success",
+						"schema": {
+							"$ref": "ClipGetSuccess"
+						}
+					},
+					"400": {
+						"description": "Clip id is required, clip does not exist, or Online News clips do not have a thumbnail"
+					},
+					"401": {
+						"description": "Unauthorized"
+					},
+					"404": {
+						"description": "No thumbnail found for that clip"
+					}
+				}
+			}
+		},
+		"/market": {
+			"get": {
+				"tags": ["Market"],
+				"summary": "Returns details on all broadcast markets",
+				"description": "Returns details on all broadcast markets.",
+				"operationId": "market_get",
+				"responses": {
+					"200": {
+						"description": "Success",
+						"schema": {
+							"$ref": "MarketGetSuccess"
+						}
+					}
+				}
+			}
+		},
+ 		"/program": {
+			"get": {
+				"tags": ["Program"],
+				"summary": "Returns program details based on title search.",
+				"description": "Returns program details based on title search.",
+				"operationId": "Program_read",
+				"parameters": [
+					{
+						"name": "title",
+						"type": "string",
+						"format": "string",
+						"in": "query",
+						"description": "The title of the program on which to search.",
+						"required": true
+					},
+					{
+						"name": "alias",
+						"type": "string",
+						"in": "query",
+						"description": "tv, radio, or news",
+						"required": true
+					},
+					{
+						"name": "start",
+						"type": "string",
+						"in": "query",
+						"description": "Search start data-time: YYYY-MM-DD HH:mm:SS",
+						"required": false
+					},
+					{
+						"name": "end",
+						"type": "string",
+						"in": "query",
+						"description": "Search end data-time: YYYY-MM-DD HH:mm:SS",
+						"required": false
+					}
+				],
+				"responses": {
+					"200": {
+						"description": "Success",
+						"schema": {
+							"$ref": "ProgramGetSuccess"
+						}
+					}
+				}
+			}
+		},
+       "/schedule": {
+            "get": {
+                "tags": ["Schedule"],
+                "summary": "Lists the programming schedule record for this channel",
+                "description": "Lists the programming schedule record for this channel.",
+                "operationId": "schedule_get",
+                "parameters": [
+	                {
+	                    "name": "channelId",
+	                    "type": "integer",
+	                    "format": "int32",
+	                    "in": "query",
+	                    "description": "The unique channel identifier.",
+	                    "required": true
+	                },
+	                {
+	                    "name": "minTime",
+	                    "type": "integer",
+	                    "format": "int32",
+	                    "in": "query",
+	                    "description": "Exclude hits before a specified time. Time is entered in this format:\n* yyyyMMddHHmmss\n\n",
+	                    "required": true
+                    },
+                    {
+	                    "name": "maxTime",
+	                    "type": "integer",
+	                    "format": "int32",
+	                    "in": "query",
+	                    "description": "Exclude hits after a specified time. Time is entered in this format:\n* yyyyMMddHHmmss\n\n",
+	                    "required": true
+                    },
+                    {
+	                    "name": "local",
+	                    "type": "integer",
+	                    "format": "int32",
+	                    "in": "query",
+	                    "description": "Boolean. Set local to 1 to get schedule filtered by local source type.",
+	                    "required": false
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Success",
+                        "schema": {
+                            "$ref": "ScheduleGetSuccess"
+                        }
+                    }
+                }
+            }
+        },
+		"/search": {
+			"post": {
+				"tags": ["Search"],
+				"summary": "Create a new search",
+				"description": "Create a new search.",
+				"operationId": "search_post",
+				"parameters": [
+					{
+						"name": "start",
+						"type": "string",
+						"in": "query",
+						"description": "The start date and time for a search. Entered in the format:\n* YYYY-MM-DD HH:MM:SS\n\nExample:\n* 2019-01-01 09:00:00\n\n",
+						"required": true
+					},
+					{
+						"name": "end",
+						"type": "string",
+						"in": "query",
+						"description": "The end date and time for a search. Entered in the format:\n* YYYY-MM-DD HH:MM:SS\n\nExample\n* 2019-01-01 09:00:00\n\n",
+						"required": true
+					},
+					{
+						"name": "requiredKeywords",
+						"type": "string",
+						"in": "query",
+						"description": "Alphanumeric. Results must match all the specified words in the query.",
+						"required": false
+					},
+					{
+						"name": "exactPhrase",
+						"type": "string",
+						"in": "query",
+						"description": "Alphanumeric. Results must match exactly the phrase in the query.",
+						"required": false
+					},
+					{
+						"name": "anyKeywords",
+						"type": "string",
+						"in": "query",
+						"description": "Alphanumeric. Any subject matter words you want included in the search. The query can match any of the specified keywords.",
+						"required": false
+					},
+					{
+						"name": "excludedKeywords",
+						"type": "string",
+						"in": "query",
+						"description": "Alphanumeric. Ignore hits with any of the specified keywords.",
+						"required": false
+					},
+					{
+						"name": "booleanQuery",
+						"type": "string",
+						"in": "query",
+						"description": "Uses a boolean query for defining the search. Enter two or more items to construct your search.",
+						"required": false
+					},
+					{
+						"name": "languageCode",
+						"type": "string",
+						"in": "query",
+						"description": "Filter search by language, input must be comma separated ISO 639-1 (2 letter) language codes. (e.g.: en,es,zh)",
+						"required": false
+					},
+					{
+						"name": "filterSyndicated",
+						"type": "integer",
+						"format": "int32",
+						"in": "query",
+						"description": "Boolean. Restricts the search to syndicated programs. This removes duplicate entries from appearing as the same data is captured from different markets. Available options are:\n* <strong>0</strong> - False\n* <strong>1</strong> - True\n\n",
+						"required": false
+					},
+					{
+						"name": "cTV",
+						"type": "integer",
+						"format": "int32",
+						"in": "query",
+						"description": "Boolean. Searches on TV content. Valid values are:\n* <strong>0</strong> - False\n* <strong>1</strong> - True</li><ol>",
+						"required": false
+					},
+					{
+						"name": "tvChannels",
+						"type": "string",
+						"in": "query",
+						"description": "List of the numeric channel IDs arranged as comma separated values (.CSV). Each channel has a unique numeric identifier. <strong>This is only useful when ctv=1.</strong>",
+						"required": false
+					},
+					{
+						"name": "tvChannelSets",
+						"type": "string",
+						"in": "query",
+						"description": "A grouping of channels. Entered as comma separated integers.",
+						"required": false
+					},
+					{
+						"name": "tvNetworks",
+						"type": "string",
+						"in": "query",
+						"description": "Alphanumeric. The name corresponding to a national network. Enter the text corresponding to the network name. For example, ABC, NBC, CBS, FOX.",
+						"required": false
+					},
+					{
+						"name": "tvMarkets",
+						"type": "string",
+						"in": "query",
+						"description": "Filter search results by markets. Takes a comma-separated list of market IDs. Examples of market output, with associated market IDs, are:`[{\"id\": 1, \"rank\": 1, \"name\": \"New York\", \"state\": \"NY\", \"country\": \"United States\"}\n* {\"id\": 2, \"rank\": 2, \"name\": \"Los Angeles\", \"state\": \"CA\", \"country\": \"United States\"}]`",
+						"required": false
+					},
+					{
+						"name": "tvStates",
+						"type": "string",
+						"in": "query",
+						"description": "Filter tv search results by market state. For example: \"NY,CA\"",
+						"required": false
+					},
+					{
+						"name": "tvCountry",
+						"type": "string",
+						"in": "query",
+						"description": "Filter tv search results by market country. For example: \"US, GB\"",
+						"required": false
+					},
+					{
+						"name": "tvTitle",
+						"type": "string",
+						"in": "query",
+						"description": "Alphanumeric. The descriptive title of a TV program. <strong>This is only useful when cTV=1.</strong>",
+						"required": false
+					},
+					{
+						"name": "tvGenres",
+						"type": "string",
+						"in": "query",
+						"description": "The specific genre to which a clip belongs.<br><br>Some genre examples:\n1. News\n2. Talk\n3. Public Affairs\n4. Business Financial\n5. News Magazine\n6. Educational\n7. Consumer\n8. Documentary\n9. Entertainment\n10. Event\n11. Holiday Special\n12. Interview\n13. Politics\n14. Religious\n15. Sports event",
+						"required": false
+					},
+					{
+						"name": "cRadio",
+						"type": "integer",
+						"format": "int32",
+						"in": "query",
+						"description": "Boolean. Searches on radio content. Valid values are\n* <strong>0</strong> - False\n* <strong>1</strong> - True\n\n",
+						"required": false
+					},
+					{
+						"name": "radioChannels",
+						"type": "string",
+						"in": "query",
+						"description": "A list of the numeric channel IDs arranged as comma separated values (.CSV). Each channel has a unique numeric identifier. <strong>This is only useful when cRadio=1.</strong>",
+						"required": false
+					},
+					{
+						"name": "radioChannelSets",
+						"type": "string",
+						"in": "query",
+						"description": "A grouping of channels. Entered as comma separated integers.",
+						"required": false
+					},
+					{
+						"name": "radioNetworks",
+						"type": "string",
+						"in": "query",
+						"description": "Alphanumeric. The name corresponding to a national network. Enter the text corresponding to the network name. For example, ABC, NBC, CBS, FOX.",
+						"required": false
+					},
+					{
+						"name": "radioMarkets",
+						"type": "string",
+						"in": "query",
+						"description": "Filter search results by markets. Takes a comma-separated list of market IDs. Examples of market output, with associated market IDs, are:`[{\"id\": 1, \"rank\": 1, \"name\": \"New York\", \"state\": \"NY\", \"country\": \"United States\"}\n* {\"id\": 2, \"rank\": 2, \"name\": \"Los Angeles\", \"state\": \"CA\", \"country\": \"United States\"}]`",
+						"required": false
+					},
+					{
+						"name": "radioStates",
+						"type": "string",
+						"in": "query",
+						"description": "Filter radio search results by market state. For example: \"NY,CA\"",
+						"required": false
+					},
+					{
+						"name": "radioCountry",
+						"type": "string",
+						"in": "query",
+						"description": "Filter radio search results by market country. For example: \"US, GB\"",
+						"required": false
+					},
+					{
+						"name": "radioTitle",
+						"type": "string",
+						"in": "query",
+						"description": "Alphanumeric. The descriptive title of a radio program. <strong>This is only useful when cRadio=1.</strong>",
+						"required": false
+					},
+					{
+						"name": "radioGenres",
+						"type": "string",
+						"in": "query",
+						"description": "The specific genre to which a clip belongs.<br><br>Some genre examples:\n1. News\n2. Talk\n3. Public Affairs\n4. Business Financial\n5. News Magazine\n6. Educational\n7. Consumer\n8. Documentary\n9. Entertainment\n10. Event\n11. Holiday Special\n12. Interview\n13. Politics\n14. Religious\n15. Sports event",
+						"required": false
+					},
+					{
+						"name": "podcast",
+						"type": "integer",
+						"in": "query",
+						"description": "Boolean. Search on podcast content. Valid values are:\n* <strong>0</strong> - False\n* <strong>1</strong> - True\n\n",
+						"required": false
+					},
+					{
+						"name": "excludedSourcePodcast",
+						"type": "string",
+						"in": "query",
+						"description": "String. Exclude specific podcasts from search results. For example, 'Anderson Cooper 360'",
+						"required": false
+					},
+					{
+						"name": "sourcePodcast",
+						"type": "string",
+						"in": "query",
+						"description": "String. Include specific podcasts in search results. For example, 'Anderson Cooper 360'",
+						"required": false
+					},
+					{
+						"name": "podcastCategory",
+						"type": "string",
+						"in": "query",
+						"description": "Search podcasts by categories. <br><br>Some category examples:\n1. Business\n2. Investing\n3. Non-Profit\n4. News Commentary",
+						"required": false
+					},
+					{
+						"name": "licensedOnly",
+						"type": "integer",
+						"in": "query",
+						"description": "Boolean. Include only licensed content in search for online and print. Valid values are:\n* <strong>0</strong> - False\n* <strong>1</strong> - True\n\n",
+						"required": false
+					},
+					{
+						"name": "excludeDuplicateArticles",
+						"type": "integer",
+						"in": "query",
+						"description": "Boolean. Exclude duplicate articles from search for online and print. Valid values are:\n* <strong>0</strong> - False\n* <strong>1</strong> - True\n\n",
+						"required": false
+					},
+					{
+						"name": "youtube",
+						"type": "integer",
+						"in": "query",
+						"description": "Boolean. Search on youtube content. Valid values are:\n* <strong>0</strong> - False\n* <strong>1</strong> - True\n\n",
+						"required": false
+					},
+					{
+						"name": "titleYoutube",
+						"type": "string",
+						"in": "query",
+						"description": "String. Include specific youtube channels in search results. For example, 'Reuters'",
+						"required": false
+					},
+					{
+						"name": "excludedTitleYoutube",
+						"type": "string",
+						"in": "query",
+						"description": "String. Exclude specific youtube channels from search results. For example, 'Reuters'",
+						"required": false
+					},
+
+					{
+						"name": "limit",
+						"type": "integer",
+						"format": "int32",
+						"in": "query",
+						"description": "Integer. The maximum number of results to return. Maximum of 500 for Search.",
+						"required": false
+					},
+					{
+						"name": "page",
+						"type": "integer",
+						"format": "int32",
+						"in": "query",
+						"description": "Integer. The entry number to start with. You can use this to return your results from a specific entry number. Enter a number 0 or greater.",
+						"required": false
+					},
+					{
+						"name": "programIds",
+						"type": "integer",
+						"format": "int32",
+						"in": "query",
+						"description": "Integer. The unique program identifier.",
+						"required": false
+					},
+					{
+						"name": "sortOrder",
+						"type": "string",
+						"in": "query",
+						"description": "How to sort the results: asc - ascending, desc - descending.",
+						"required": false
+					}
+				],
+				"responses": {
+					"200": {
+						"description": "
+							       <b>adValue</b>: national publicity dollar value from SQAD<br>
+							       <b>affiliate</b>: broadcast affiliate (ex. ABC, CBS, NPR, ESPN Radio)<br>
+							       <b>alias</b>: media type (tv, radio, news, podcast, youtube, facebook, twitter)<br>
+							       <b>broadcastTZ</b>: timezone of the original broadcast location in tz database format (ex. America/New_York, America/Chicago)<br>
+							       <b>broadcastType</b>: channel type (ex. National Broadcast Network, National Cable, Independent, US Radio)<br>
+							       <b>callSign</b>: station call letters (ex. WCBS, KNBC, CNN)<br>
+								   <b>categories</b>: the category of the Youtube clip (ex. News & Politics)<br>
+							       <b>ccText</b>: closed caption text for this one minute clip<br>
+								   <b>ccTextHiWords</b>: abbreviated closed caption text for this one minute clip containing search term (ex. policy, education)<br>
+							       <b>channelId</b>: integer identifier of the broadcast station<br>
+								   <b>copyright</b>: copyright details for podcast clip<br>
+							       <b>dataSourceId</b>: integer identifier of media type (1 for TV, 5 for Radio) <br>
+							       <b>duration</b>: clip length in seconds (all clips will be 60 seconds)<br>
+							       <b>endTime</b>: program end timestamp (ex. 20200106172959)<br>
+								   <b>entities</b>: set of data points about the podcast episode: mentions, score, type, and phrase (ex. mentions: 3, score: 0.45000001788139343, type: 'Company', phrase: 'British Broadcasting Corporation')<br>
+							       <b>episode</b>: podcast episode <br>
+								   <b>episode_link</b>: link for podcast episode<br>
+							       <b>genre</b>: program genre (ex. News, Sports, Drama)<br>
+								   <b>has_captions</b>: verifies if the clip has captions (ex. true or false)<br>
+							       <b>id</b>: n/a<br>
+							       <b>language</b>: program language (ex. English)<br>
+							       <b>localAdValue</b>: local publicity dollar value from SQAD<br>
+							       <b>localNumHouseholds</b>: local audience value from Nielsen<br>
+							       <b>localTime</b>: clip airtime in the local timezone of the broadcast station<br>
+							       <b>marketCountry</b>: broadcast country (ex. United States)<br>
+							       <b>marketId</b>: integer identifier for each local market (note: this is not the Nielsen DMA rank, which can change every year)<br>
+							       <b>marketLocal</b>: broadcast coverage area of station (Local or National)<br>
+							       <b>marketName</b>: DMA name from Nielsen<br>
+							       <b>marketRank</b>: DMA rank from Nielsen (#1 - #210)<br>
+							       <b>marketState</b>: U.S. state code, where applicable<br>
+							       <b>mediaPreview</b>: simple preview player URL link for embedding in an iFrame, used for watching this one minute clip<br>
+							       <b>mediaUrl</b>: Wordplay link for editing a clip beyond a single minute (this URL should be used to iFrame CM's player in your application)<br>
+							       <b>mediaUrlNoHighlight</b>: Wordplay link without keyword highlighting. This applies only if the API search request contains keywords<br>
+							       <b>mimeType</b>: format of file, CM handles this automatically in mediaPreview and mediaURL (video/x-flv or audio/mpeg)<br>
+							       <b>numHouseholds</b>: national audience value from Nielsen<br>
+							       <b>programId</b>: unique identifier for the broadcast program from Nielsen<br>
+							       <b>resultType</b>: TV or radio media type (cTV or cRadio)<br>
+							       <b>sourceType</b>: program type (Local, Network, or Syndicated)<br>
+							       <b>startTime</b>: program start timestamp (ex. 20200106170000)<br>
+							       <b>textOnly</b>: boolean value for whether CM has the rights to share the media content from this station<br>
+							       <b>thumbnailUrl</b>: thumbnail image from the start of this one minute clip<br>
+							       <b>time</b>: clip airtime in the API user's local time zone (ex. \"Jan 06, 2020 12:08 PM EST (UTC -0500\") )<br>
+							       <b>timestamp</b>: clip timestamp in UTC (ex. 20200106193500)<br>
+							       <b>timezone</b>: API user's local timezone (ex. US/Eastern)<br>
+							       <b>title</b>: program title from Nielsen<br>
+							       <b>uuid</b>: unique identifier for this one minute clip<br>
+						",
+						"schema": {
+							  "type": "object",
+							  "properties": {
+							  		"message": {
+							  	    		   "type": "string",
+								     		   "example": "OK"
+							  		},
+							  		"results": {
+							  	     		   "type": "object",
+								     		   "properties": {
+						      		     		   		 "total": {
+						      	       			   		 	  "type": "integer",
+							       				    		  "example": 555
+						      				   		 },
+												 "clips": {
+												 	  "type": "array",
+													  "items": [
+													  {
+													  	   "type": "object",
+														   "properties": {
+														   		 "mimeType": { "type": "string", "example": "video/x-flv" },
+														   		 "localNumHouseholds": { "type": "integer", "example": 1000 },
+														   		 "channelId": { "type": "integer", "example": 7068 },
+														   		 "numHouseholds": { "type": "integer", "example": 100 },
+														   		 "duration": { "type": "integer", "example": 60 },
+														   		 "thumbnailUrl": { "type": "string", "example": "https://tor101.assets.criticalmention.com/7068/20200102170000/20200102171300.jpg" },
+														   		 "id": { "type": "integer", "example": 9781787989 },
+														   		 "ccTextHiWords": { "type": "string", "example": "Bitcoin" },
+														   		 "ccText": { "type": "string", "example": "stopping. they're very expensive. they will remain expensive but if you're going to play, today is as good a day to buy as anyway because they're only going up. >> Greg: back with bruce murray. he's going to take your calls, e-mails, and tweets on north american growth stocks. so give us a call toll-free, 1-855-326-6266. [ ? ] Woman: <span class=\"highlight\">Bitcoin</span> prices are taking investors on a wild ride. Man: And here, at home, the volatility in cryopcurrency for Canadians may just be the tip of the iceberg. (Dynamic instrumental music) ? You can learn a lot from your little voice. i really didn't think about health and dental coverage until i started listening to the little voice in my head. It's a little thing that can make a big difference. She had me apply at coverme.com. Next thing i know... We were" },
+														   		 "marketCountry": { "type": "string", "example": "Canada" },
+														   		 "marketId": { "type": "integer", "example": 301 },
+														   		 "timezone": { "type": "string", "example": "America/Toronto" },
+														   		 "resultType": { "type": "string", "example": "cTV" },
+														   		 "marketName": { "type": "string", "example": "Canada" },
+														   		 "marketState": { "type": "string", "example": "" },
+														   		 "mediaUrl": { "type": "string", "example": "https://app.criticalmention.com/cm/wordplay?uuid=72e155f3-4b0c-4c5e-8b2a-4d1effddbd4a&channelId=7068&minTime=20200102170000&maxTime=20200102175959&token=893619b2-f116-4585-becf-43981ce555bd&keyword=Bitcoin" },
+														   		 "mediaUrlNoHighlight": { "type": "string", "example": "https://app.criticalmention.com/cm/wordplay?uuid=72e155f3-4b0c-4c5e-8b2a-4d1effddbd4a&channelId=7068&minTime=20200102170000&maxTime=20200102175959&token=893619b2-f116-4585-becf-43981ce555bd" },
+														   		 "sourceType": { "type": "string", "example": "Network" },
+														   		 "marketRank": { "type": "integer", "example": 301 },
+														   		 "timestamp": { "type": "string", "example": "20200102171300" },
+														   		 "time": { "type": "string", "example": "Jan 02, 2020 12:13 PM EST (UTC -0500)" },
+														   		 "broadcastTZ": { "type": "string", "example": "America/New_York" },
+														   		 "programId": { "type": "string", "example": "00374036" },
+														   		 "dataSourceId": { "type": "integer", "example": 1 },
+														   		 "startTime": { "type": "string", "example": "20200102170000" },
+														   		 "localAdValue": { "type": "integer", "example": 0 },
+														   		 "genre": { "type": "string", "example": "Bus./financial" },
+														   		 "marketLocal": { "type": "string", "example": "International" },
+														   		 "localTime": { "type": "string", "example": "Jan 02, 2020 12:13 PM EST (UTC -0500)" },
+														   		 "endTime": { "type": "string", "example": "20200102175959" },
+														   		 "language": { "type": "string", "example": "English" },
+														   		 "relativeMediaUrl": { "type": "string", "example": "/cm/wordplay?uuid=72e155f3-4b0c-4c5e-8b2a-4d1effddbd4a&channelId=7068&minTime=20200102170000&maxTime=20200102175959&token=893619b2-f116-4585-becf-43981ce555bd&keyword=Bitcoin" },
+														   		 "title": { "type": "string", "example": "Market Call" },
+														   		 "uuid": { "type": "string", "example": "72e155f3-4b0c-4c5e-8b2a-4d1effddbd4a" },
+														   		 "legacyMedia": { "type": "string", "example": "http://tor101.assets.criticalmention.com/flv_stream.php?filename=7068/20200102170000/20200102170000_full.flv&start=780&duration=60" },
+														   		 "alias": { "type": "string", "example": "TV" },
+														   		 "callSign": { "type": "string", "example": "BNNB" },
+														   		 "affiliate": { "type": "string", "example": "BNN" },
+														   		 "media": { "type": "string", "example": "https://tor101.assets.criticalmention.com/stream.php?user_id=5618&start=1577985180000&fmt=m3u8&stop=1577985240000&channel_id=7068&exp=1578079897&hmac=c7bfe4ed44a0c9987b5ef86be5e6c5062f3edb9d5f95eb56daad9e1878732314" },
+														   		 "adValue": { "type": "integer", "example": 0 },
+														   		 "textOnly": { "type": "boolean", "example": false },
+														   		 "broadcastType": { "type": "string", "example": "Canada" }
+														   }
+													  },
+													  {
+													  	   "type": "object",
+														   "properties": {
+														   		 "mimeType": { "type": "string", "example": "audio/mpeg" },
+																 "localNumHouseholds": { "type": "integer", "example": 0 },
+																 "channelId": { "type": "integer", "example": 6702 },
+																 "numHouseholds": { "type": "integer", "example": 0 },
+																 "duration": { "type": "integer", "example": 60 },
+																 "thumbnailUrl": { "type": "string", "example": "https://radio014.assets.criticalmention.com/6702/20200102200000/20200102200100.jpg" },
+																 "id": { "type": "integer", "example": 9782127618 },
+																 "ccTextHiWords": { "type": "string", "example": "economy" },
+																 "ccText": { "type": "string", "example": "property in edmonton has declined in value the city today mailed out the annual assessment notices and is global scott johnson tells us the slumping <span class=\"highlight\">economy</span> has had an impact on your real estate holdings values are down anywhere from one to six percent a major exceptions in the university area city assessor kate watch is pretty well everywhere else things are following the slope we're seeing in the <span class=\"highlight\">economy</span> and there's nothing bad that stands out to me as being particularly a typical we i just seeing a general damning trend in and %hesitation housing belly value sydney region even the optimism city council is sean for pockets along the future l. r. t. to drive valuations up has not materialized yet we don't see a correlation with transit this yes he says we'll let you know what you're" },
+																 "marketCountry": { "type": "string", "example": "Canada" },
+																 "marketId": { "type": "integer", "example": 301 },
+																 "timezone": { "type": "string", "example": "America/Toronto" },
+																 "resultType": { "type": "string", "example": "cRadio" },
+																 "marketName": { "type": "string", "example": "Canada" },
+																 "marketState": { "type": "string", "example": "" },
+																 "mediaUrl": { "type": "string", "example": "https://app.criticalmention.com/cm/wordplay?uuid=fdcd14bf-d80f-4ede-9c3b-9dd7d0c0b78c&channelId=6702&minTime=20200102190000&maxTime=20200102205959&token=893619b2-f116-4585-becf-43981ce555bd&keyword=economy" },
+																 "mediaUrlNoHighlight": { "type": "string", "example": "https://app.criticalmention.com/cm/wordplay?uuid=fdcd14bf-d80f-4ede-9c3b-9dd7d0c0b78c&channelId=6702&minTime=20200102190000&maxTime=20200102205959&token=893619b2-f116-4585-becf-43981ce555bd" },
+																 "sourceType": { "type": "string", "example": "Local" },
+																 "marketRank": { "type": "integer", "example": 301 },
+																 "timestamp": { "type": "string", "example": "20200102200100" },
+																 "time": { "type": "string", "example": "Jan 02, 2020 03:01 PM EST (UTC -0500)" },
+																 "broadcastTZ": { "type": "string", "example": "America/Denver" },
+																 "programId": { "type": "string", "example": "01580009" },
+																 "dataSourceId": { "type": "integer", "example": 5 },
+																 "startTime": { "type": "string", "example": "20200102190000" },
+																 "localAdValue": { "type": "integer", "example": 0 },
+																 "genre": { "type": "string", "example": "Sports talk Hockey" },
+																 "marketLocal": { "type": "string", "example": "International" },
+																 "localTime": { "type": "string", "example": "Jan 02, 2020 01:01 PM MST (UTC -0700)" },
+																 "endTime": { "type": "string", "example": "20200102205959" },
+																 "language": { "type": "string", "example": "English" },
+																 "relativeMediaUrl": { "type": "string", "example": "/cm/wordplay?uuid=fdcd14bf-d80f-4ede-9c3b-9dd7d0c0b78c&channelId=6702&minTime=20200102190000&maxTime=20200102205959&token=893619b2-f116-4585-becf-43981ce555bd&keyword=economy" },
+																 "title": { "type": "string", "example": "Oilers Now With Bob Stauffer" },
+																 "uuid": { "type": "string", "example": "fdcd14bf-d80f-4ede-9c3b-9dd7d0c0b78c" },
+																 "legacyMedia": { "type": "string", "example": "http://radio014.assets.criticalmention.com/flv_stream.php?filename=6702/20200102200000/20200102200000_full.flv&start=60&duration=60" },
+																 "alias": { "type": "string", "example": "RADIO" },
+																 "callSign": { "type": "string", "example": "CHED" },
+																 "affiliate": { "type": "string", "example": "CBS Radio News" },
+																 "media": { "type": "string", "example": "https://radio014.assets.criticalmention.com/stream.php?user_id=5618&start=1577995260000&fmt=m3u8&stop=1577995320000&channel_id=6702&exp=1578081765&hmac=c55f8e6b2c62742bafa96b2cc311a9c3264b9a1916fe1fe46360461f9dac2d62" },
+																 "adValue": { "type": "integer", "example": 0 },
+																 "textOnly": { "type": "boolean", "example": false },
+																 "broadcastType": { "type": "string", "example": "Radio Canada" }
+														   }
+													  }
+												]
+										}
+								     	}
+							  	}
+						 	}
+						}
+					}
+				}
+			}
+		},
+		"/session": {
+			"post": {
+				"tags": ["Session"],
+				"summary": "Authenticates and creates a new Critical TV session",
+				"description": "Authenticates and creates a new Critical TV session. To use this call you must know the partner's username and password.",
+				"operationId": "session_post",
+				"parameters": [
+					{
+						"name": "username",
+						"type": "string",
+						"in": "formData",
+						"description": "Alphanumeric. The username which grants you access to a system, entered as a unique string of alphabetic characters and numbers.<br><br>In this case it is your Critical Mention partner login.",
+						"required": true
+					},
+					{
+						"name": "password",
+						"type": "string",
+						"in": "formData",
+						"description": "Alphanumeric. The security code, phrase or word used to secure data.<br><br>In this case it is your Critical Mention password.",
+						"required": true
+					},
+					{
+						"name": "clientId",
+						"type": "integer",
+						"format": "int32",
+						"in": "formData",
+						"description": "Integer. The partner identifier which indicates an agreement with the clip's owner. Also provides a way to group objects such as orders and reports. If not present on an order, it is presumed the order is anonymous and will be asked for demographics and credit card info.<br><br>Note:<br><br>To use this parameter your account must be enabled to use ClientTRAK.",
+						"required": false
+					}
+				],
+				"responses": {
+					"200": {
+						"description": "Success",
+						"schema": {
+							"$ref": "SessionPostSuccess"
+						}
+					}
+				}
+			}
+		}
+    },
+	"definitions": {
+		"ChannelGetSuccess": {
+			"properties": {
+				"example": {
+					"type": "array",
+					"description": "array",
+					"items": {
+						"type": "object",
+						"description": "object"
+					}
+				}
+			}
+		},
+		"ChannelIdGetSuccess": {
+			"properties": {
+				"name": {
+					"type": "string",
+					"description": "string"
+				},
+				"callSign": {
+					"type": "string",
+					"description": "string"
+				},
+				"affiliate": {
+					"type": "string",
+					"description": "string"
+				},
+				"broadcastType": {
+					"type": "string",
+					"description": "string"
+				},
+				"id": {
+					"type": "integer",
+					"format": "int32",
+					"description": "integer"
+				}
+			}
+		},
+		"DownloadPostSuccess": {
+			"properties": {
+				"reference": {
+					"type": "string",
+					"description": "string"
+				},
+				"format": {
+					"type": "object",
+					"description": "object"
+				},
+				"dateCreated": {
+					"type": "string",
+					"description": "string"
+				},
+				"clipCollection": {
+					"type": "object",
+					"description": "object"
+				},
+				"user": {
+					"type": "object",
+					"description": "object"
+				},
+				"quality": {
+					"type": "string",
+					"description": "string"
+				},
+				"id": {
+					"type": "integer",
+					"format": "int32",
+					"description": "integer"
+				},
+				"received": {
+					"type": "boolean",
+					"description": "boolean"
+				},
+				"transaction": {
+					"type": "object",
+					"description": "object"
+				},
+				"clip": {
+					"type": "object",
+					"description": "object"
+				},
+				"remaining": {
+					"type": "integer",
+					"format": "int32",
+					"description": "integer"
+				},
+				"dataFormat": {
+					"type": "object",
+					"description": "object"
+				},
+				"email": {
+					"type": "string",
+					"description": "string"
+				}
+			}
+		},
+		"DownloadIdGetSuccess": {
+			"properties": {
+				"orderId": {
+					"type": "integer",
+					"format": "int32",
+					"description": "integer"
+				},
+				"storageResponse": {
+					"type": "string",
+					"description": "string"
+				},
+				"remaining": {
+					"type": "integer",
+					"format": "int32",
+					"description": "integer"
+				},
+				"personId": {
+					"type": "string",
+					"description": "string"
+				},
+				"expires": {
+					"type": "string",
+					"description": "string"
+				},
+				"userId": {
+					"type": "integer",
+					"format": "int32",
+					"description": "integer"
+				},
+				"lastUpdated": {
+					"type": "string",
+					"description": "string"
+				},
+				"dateCreated": {
+					"type": "string",
+					"description": "string"
+				},
+				"callback": {
+					"type": "string",
+					"description": "string"
+				},
+				"skinId": {
+					"type": "integer",
+					"format": "int32",
+					"description": "integer"
+				},
+				"link": {
+					"type": "string",
+					"description": "string"
+				},
+				"filesize": {
+					"type": "string",
+					"description": "string"
+				},
+				"glink": {
+					"type": "string",
+					"description": "string"
+				},
+				"downloadCount": {
+					"type": "integer",
+					"format": "int32",
+					"description": "integer"
+				},
+				"genieResponse": {
+					"type": "string",
+					"description": "string"
+				},
+				"email": {
+					"type": "string",
+					"description": "string"
+				},
+				"sent": {
+					"type": "integer",
+					"format": "int32",
+					"description": "integer"
+				},
+				"md5": {
+					"type": "string",
+					"description": "string"
+				}
+			}
+		},
+		"DownloadIdFetchGetSuccess": {
+			"properties": {
+				"clip": {
+					"type": "object",
+					"description": "object"
+				},
+				"skin_id": {
+					"type": "integer",
+					"format": "int32",
+					"description": "integer"
+				},
+				"id": {
+					"type": "integer",
+					"format": "int32",
+					"description": "integer"
+				},
+				"glink": {
+					"type": "string",
+					"description": "string"
+				},
+				"remaining": {
+					"type": "integer",
+					"format": "int32",
+					"description": "integer"
+				}
+			}
+		},
+		"MarketGetSuccess": {
+			"properties": {
+				"example": {
+					"type": "array",
+					"description": "array",
+					"items": {
+						"type": "object",
+						"description": "object"
+					}
+				}
+			}
+		},
+		"OrderPostSuccess": {
+			"properties": {
+				"reference": {
+					"type": "string",
+					"description": "string"
+				},
+				"dateCreated": {
+					"type": "string",
+					"description": "string"
+				},
+				"clipCollection": {
+					"type": "object",
+					"description": "object"
+				},
+				"user": {
+					"type": "object",
+					"description": "object"
+				},
+				"quality": {
+					"type": "string",
+					"description": "string"
+				},
+				"id": {
+					"type": "integer",
+					"format": "int32",
+					"description": "integer"
+				},
+				"received": {
+					"type": "boolean",
+					"description": "boolean"
+				},
+				"transaction": {
+					"type": "object",
+					"description": "object"
+				},
+				"clip": {
+					"type": "object",
+					"description": "object"
+				},
+				"remaining": {
+					"type": "integer",
+					"format": "int32",
+					"description": "integer"
+				},
+				"dataFormat": {
+					"type": "object",
+					"description": "object"
+				},
+				"email": {
+					"type": "string",
+					"description": "string"
+				}
+			}
+		},
+		"OrderMenuPostSuccess": {
+			"properties": {
+				"DVD": {
+					"type": "array",
+					"description": "array",
+					"items": {
+						"type": "object",
+						"description": "object"
+					}
+				},
+				"DataDVD": {
+					"type": "array",
+					"description": "array",
+					"items": {
+						"type": "object",
+						"description": "object"
+					}
+				},
+				"Download": {
+					"type": "array",
+					"description": "array",
+					"items": {
+						"type": "object",
+						"description": "object"
+					}
+				},
+				"Media Gallery": {
+					"type": "array",
+					"description": "array",
+					"items": {
+						"type": "object",
+						"description": "object"
+					}
+				},
+				"Transcript": {
+					"type": "array",
+					"description": "array",
+					"items": {
+						"type": "object",
+						"description": "object"
+					}
+				},
+				"Download Production Edited": {
+					"type": "array",
+					"description": "array",
+					"items": {
+						"type": "object",
+						"description": "object"
+					}
+				}
+			}
+		},
+		"ScheduleGetSuccess": {
+			"properties": {
+				"example": {
+					"type": "array",
+					"description": "array",
+					"items": {
+						"type": "object",
+						"description": "object"
+					}
+				}
+			}
+		},
+		"SearchWordplayPostSuccess": {
+			"properties": {
+				"skipBackward": {
+					"type": "boolean",
+					"description": "boolean"
+				},
+				"skipBackwardId": {
+					"type": "string",
+					"description": "string"
+				},
+				"clip": {
+					"type": "object",
+					"description": "object"
+				},
+				"skipForward": {
+					"type": "boolean",
+					"description": "boolean"
+				},
+				"minutes": {
+					"type": "array",
+					"description": "array",
+					"items": {
+						"properties": {
+							"type": "object",
+							"description": "object"
+						}
+					}
+				},
+				"skipForwardId": {
+					"type": "string",
+					"description": "string"
+				},
+				"thumbnail": {
+					"type": "string",
+					"description": "string"
+				}
+			}
+		},
+		"SessionPostSuccess": {
+			"properties": {
+				"filterSyndicated": {
+					"type": "integer",
+					"format": "int32",
+					"description": "integer"
+				},
+				"client": {
+					"type": "object",
+					"description": "object"
+				},
+				"user": {
+					"type": "object",
+					"description": "object"
+				},
+				"id": {
+					"type": "string",
+					"description": "string"
+				}
+			}
+		}
+	}
+}

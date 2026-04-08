@@ -40,7 +40,7 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_WATCH_CONFIG = {
     "market_ids": [],  # UUIDs from markets table
-    "scan_interval_hours": 1,
+    "scan_interval_hours": 4,
     "lookback_hours": 6,
 }
 
@@ -123,26 +123,44 @@ def _parse_date(val) -> date | None:
         return None
 
 
+import asyncio
+
+SCAN_CONCURRENCY = 10  # parallel station scans
+
+
 async def scan(
     conn,
     stations: list[str] | None = None,
     markets: list[str] | None = None,
     lookback_hours: int | None = None,
+    pool=None,
 ) -> dict:
     """
-    Run a full FCC radar scan cycle.
+    Run a full FCC radar scan cycle with concurrent station scanning.
 
     Args:
-        conn: asyncpg connection
+        conn: asyncpg connection (used for setup/teardown queries)
         stations: override station list (default: from config)
         markets: override market/DMA list — resolved to stations via DB
         lookback_hours: override lookback window (default: from config)
+        pool: asyncpg pool for concurrent workers (each gets its own conn)
 
     Returns:
         Summary dict with scan stats.
     """
     now = datetime.now(timezone.utc)
     scan_id = uuid.uuid4()
+
+    # Clean up zombie scans — mark any "In Progress" scans older than 45 min as timed out
+    zombie_cutoff = now - timedelta(minutes=45)
+    zombies = await conn.execute(
+        """UPDATE radar_scans
+           SET completed_at = $1, error_details = COALESCE(error_details || E'\n', '') || 'Timed out (zombie cleanup)'
+           WHERE completed_at IS NULL AND started_at < $2""",
+        now, zombie_cutoff,
+    )
+    if zombies and zombies != "UPDATE 0":
+        logger.info(f"Cleaned up zombie scans: {zombies}")
 
     # Record scan start
     await conn.execute(
@@ -159,6 +177,7 @@ async def scan(
         "errors": 0,
         "error_details": [],
     }
+    stats_lock = asyncio.Lock()
 
     try:
         # Load config
@@ -167,12 +186,9 @@ async def scan(
         cutoff = now - timedelta(hours=lb_hours)
 
         # Scan ALL stations in the database — build the complete national picture.
-        # Watchlist is used for alerts/display filtering, not scan scope.
         if stations:
-            # Explicit override (for testing)
             all_stations = stations
         else:
-            # Get all stations with FCC entity IDs
             rows = await conn.fetch(
                 "SELECT call_sign FROM stations WHERE fcc_entity_id IS NOT NULL ORDER BY call_sign"
             )
@@ -180,17 +196,36 @@ async def scan(
 
         watch_stations = all_stations
 
-        logger.info(f"Radar scan starting: {len(watch_stations)} stations, lookback={lb_hours}h")
+        logger.info(f"Radar scan starting: {len(watch_stations)} stations, lookback={lb_hours}h, concurrency={SCAN_CONCURRENCY}")
+
+        sem = asyncio.Semaphore(SCAN_CONCURRENCY)
+
+        _stations_completed = {"count": 0}
+
+        async def _scan_one(fcc, call_sign):
+            async with sem:
+                try:
+                    if pool:
+                        async with pool.acquire() as worker_conn:
+                            await _scan_station(worker_conn, fcc, call_sign, cutoff, now, stats, stats_lock)
+                    else:
+                        await _scan_station(conn, fcc, call_sign, cutoff, now, stats, stats_lock)
+                    async with stats_lock:
+                        stats["stations_scanned"] += 1
+                        _stations_completed["count"] += 1
+                        # Flush stats to DB every 50 stations so progress is visible
+                        if _stations_completed["count"] % 50 == 0:
+                            await _flush_scan_stats(conn, scan_id, stats)
+                            logger.info(f"Scan progress: {_stations_completed['count']}/{len(watch_stations)} stations")
+                except Exception as e:
+                    async with stats_lock:
+                        stats["errors"] += 1
+                        stats["error_details"].append(f"{call_sign}: {e}")
+                    logger.exception(f"Error scanning station {call_sign}")
 
         async with FCCClient() as fcc:
-            for call_sign in watch_stations:
-                try:
-                    await _scan_station(conn, fcc, call_sign, cutoff, now, stats)
-                    stats["stations_scanned"] += 1
-                except Exception as e:
-                    stats["errors"] += 1
-                    stats["error_details"].append(f"{call_sign}: {e}")
-                    logger.exception(f"Error scanning station {call_sign}")
+            tasks = [_scan_one(fcc, cs) for cs in watch_stations]
+            await asyncio.gather(*tasks)
 
     except Exception as e:
         stats["errors"] += 1
@@ -198,7 +233,7 @@ async def scan(
         logger.exception("Radar scan failed")
 
     # Record scan completion
-    error_text = "\n".join(stats["error_details"]) if stats["error_details"] else None
+    error_text = "\n".join(stats["error_details"][:50]) if stats["error_details"] else None
     await conn.execute(
         """UPDATE radar_scans
            SET completed_at = $2, stations_scanned = $3, filings_found = $4,
@@ -218,7 +253,25 @@ async def scan(
     return stats
 
 
-async def _scan_station(conn, fcc: FCCClient, call_sign: str, cutoff: datetime, now: datetime, stats: dict):
+async def _flush_scan_stats(conn, scan_id, stats):
+    """Periodically flush scan stats to DB so progress is visible even if request is killed."""
+    try:
+        error_text = "\n".join(stats["error_details"][:20]) if stats["error_details"] else None
+        await conn.execute(
+            """UPDATE radar_scans
+               SET stations_scanned = $2, filings_found = $3,
+                   new_items = $4, matched_items = $5, errors = $6, error_details = $7
+               WHERE id = $1""",
+            scan_id,
+            stats["stations_scanned"], stats["filings_found"],
+            stats["new_items"], stats["matched_items"],
+            stats["errors"], error_text,
+        )
+    except Exception as e:
+        logger.warning(f"Failed to flush scan stats: {e}")
+
+
+async def _scan_station(conn, fcc: FCCClient, call_sign: str, cutoff: datetime, now: datetime, stats: dict, stats_lock=None):
     """Scan a single station for new political filings."""
     # Use stored entity ID — no FCC API call needed
     row = await conn.fetchrow(
@@ -303,6 +356,9 @@ async def _scan_station(conn, fcc: FCCClient, call_sign: str, cutoff: datetime, 
 
             # If not matched, try PDF parse for more detail (expensive path)
             filing_storage_path = None
+            document_type = None
+            parsed_data_json = None
+            pdf_parsed = False
             if status == "new" and folder_id and file_manager_id:
                 pdf_bytes = await fcc.download_filing_pdf(folder_id, file_manager_id)
                 if pdf_bytes:
@@ -310,6 +366,9 @@ async def _scan_station(conn, fcc: FCCClient, call_sign: str, cutoff: datetime, 
                     filing_storage_path = await _store_filing_pdf(pdf_bytes, call_sign, file_manager_id)
                     parsed = await parse_filing_pdf(pdf_bytes)
                     confidence = parsed.get("confidence", 0)
+                    document_type = parsed.get("document_type")
+                    pdf_parsed = True
+                    parsed_data_json = json.dumps(parsed)
 
                     if confidence >= 0.3:
                         # Update with parsed data
@@ -337,6 +396,10 @@ async def _scan_station(conn, fcc: FCCClient, call_sign: str, cutoff: datetime, 
                                 status = "likely_match"
                                 matched_buy_id = buy_match["buy_id"]
                                 stats["matched_items"] += 1
+                    if document_type in ("CONTRACT", "ORDER") and total_dollars:
+                        logger.info(f"  Parsed: {document_type} ${total_dollars:,.2f} {flight_start}→{flight_end}")
+                    elif document_type:
+                        logger.info(f"  Parsed: {document_type}")
 
             # Use stored station data for market info
             market_name = (
@@ -351,14 +414,18 @@ async def _scan_station(conn, fcc: FCCClient, call_sign: str, cutoff: datetime, 
             elif office_type == "Non-Candidate":
                 spender_type = "Issue Org"
 
-            # Insert radar item
-            await conn.execute(
+            # Insert radar item (upsert — skip silently if already exists)
+            result = await conn.execute(
                 """INSERT INTO radar_items
                    (id, fcc_filing_id, station_call_sign, market_name, spender_name,
                     spender_type, flight_start, flight_end, total_dollars, filing_url,
                     filing_storage_path, status, matched_buy_id, station_id, market_id,
+                    pdf_downloaded, pdf_parsed, parsed_at, document_type, parsed_data,
                     detected_at, created_at, updated_at)
-                   VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$16,$16)""",
+                   VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,
+                           $17,$18,$19,$20,$21::jsonb,
+                           $16,$16,$16)
+                   ON CONFLICT (fcc_filing_id) DO NOTHING""",
                 uuid.uuid4(),
                 fcc_filing_id,
                 call_sign,
@@ -375,45 +442,18 @@ async def _scan_station(conn, fcc: FCCClient, call_sign: str, cutoff: datetime, 
                 (await conn.fetchval("SELECT id FROM stations WHERE call_sign = $1", call_sign)),
                 station_market_id,
                 now,
+                filing_storage_path is not None,  # pdf_downloaded
+                pdf_parsed,
+                now if pdf_parsed else None,  # parsed_at
+                document_type,
+                parsed_data_json,
             )
+            if result == "INSERT 0 0":
+                continue  # dupe, skip
             stats["new_items"] += 1
             logger.info(
                 f"New radar item: {advertiser_name} @ {call_sign} — status={status}"
             )
-
-            # Immediately parse the PDF for this new filing
-            if folder_id and file_manager_id and not total_dollars:
-                try:
-                    pdf_bytes = await fcc.download_filing_pdf(folder_id, file_manager_id)
-                    if pdf_bytes:
-                        parsed = await parse_filing_pdf(pdf_bytes)
-                        doc_type = parsed.get("document_type", "OTHER")
-                        p_dollars = parsed.get("total_dollars") if doc_type in ("CONTRACT", "ORDER") else None
-                        p_flight_start = _parse_date(parsed.get("flight_start")) if doc_type in ("CONTRACT", "ORDER") else None
-                        p_flight_end = _parse_date(parsed.get("flight_end")) if doc_type in ("CONTRACT", "ORDER") else None
-                        p_party = parsed.get("party")
-
-                        rid = await conn.fetchval(
-                            "SELECT id FROM radar_items WHERE fcc_filing_id = $1", fcc_filing_id
-                        )
-                        if rid:
-                            import json as _json
-                            await conn.execute('''
-                                UPDATE radar_items SET
-                                    pdf_downloaded = TRUE, pdf_parsed = TRUE, parsed_at = $2,
-                                    document_type = $3, total_dollars = $4,
-                                    flight_start = $5, flight_end = $6,
-                                    spender_type = COALESCE($7, spender_type),
-                                    parsed_data = $8::jsonb
-                                WHERE id = $1
-                            ''', rid, now, doc_type, p_dollars, p_flight_start, p_flight_end,
-                                p_party, _json.dumps(parsed))
-                            if doc_type in ("CONTRACT", "ORDER") and p_dollars:
-                                logger.info(f"  Parsed: {doc_type} ${p_dollars:,.2f} {p_flight_start}→{p_flight_end}")
-                            else:
-                                logger.info(f"  Parsed: {doc_type}")
-                except Exception as e:
-                    logger.warning(f"  Parse failed for {call_sign}/{file_manager_id}: {e}")
 
         except Exception as e:
             stats["errors"] += 1

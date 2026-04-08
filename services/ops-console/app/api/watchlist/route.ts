@@ -10,7 +10,7 @@ export async function GET() {
       ['watch_config']
     )
 
-    const config = rows[0]?.value ?? { market_ids: [], scan_interval_hours: 1, lookback_hours: 24 }
+    const config = rows[0]?.value ?? { market_ids: [], scan_interval_hours: 4, lookback_hours: 6 }
     const marketIds = (config.market_ids as string[]) || []
 
     // Resolve market IDs to names + station counts for display
@@ -51,8 +51,8 @@ export async function POST(request: NextRequest) {
     )
     const config: Record<string, unknown> = rows[0]?.value ?? {
       market_ids: [],
-      scan_interval_hours: 1,
-      lookback_hours: 24,
+      scan_interval_hours: 4,
+      lookback_hours: 6,
     }
 
     const marketIds = (config.market_ids as string[]) || []

@@ -23,6 +23,8 @@ interface Buy {
   status: string
   created_at: string
   stations_count: number
+  fcc_filing_url: string | null
+  fcc_match_count: number
 }
 
 const statusOptions = [
@@ -38,9 +40,12 @@ export default function BuysPage() {
   const [css] = useStyletron()
   const router = useRouter()
   const [buys, setBuys] = useState<Buy[]>([])
+  const [total, setTotal] = useState(0)
+  const [page, setPage] = useState(0)
   const [loading, setLoading] = useState(true)
   const [spenderFilter, setSpenderFilter] = useState('')
   const [statusFilter, setStatusFilter] = useState<Array<{ id: string }>>([])
+  const pageSize = 25
 
   const fetchData = useCallback(() => {
     setLoading(true)
@@ -48,16 +53,26 @@ export default function BuysPage() {
     if (spenderFilter) params.set('spender', spenderFilter)
     const status = statusFilter[0]?.id
     if (status) params.set('status', status)
+    params.set('limit', String(pageSize))
+    params.set('offset', String(page * pageSize))
     fetch(`/api/buys?${params}`)
       .then((r) => r.json())
-      .then((data) => setBuys(data.data || []))
+      .then((data) => {
+        setBuys(data.data || [])
+        setTotal(data.total || 0)
+      })
       .catch(console.error)
       .finally(() => setLoading(false))
-  }, [spenderFilter, statusFilter])
+  }, [spenderFilter, statusFilter, page])
 
   useEffect(() => {
     fetchData()
   }, [fetchData])
+
+  // Reset to page 0 when filters change
+  useEffect(() => {
+    setPage(0)
+  }, [spenderFilter, statusFilter])
 
   const columns = [
     {
@@ -121,8 +136,33 @@ export default function BuysPage() {
     {
       header: 'Status',
       id: 'status',
-      render: (row: Buy) => <StatusTag status={row.status} />,
-      width: '130px',
+      render: (row: Buy) => (
+        <span className={css({ display: 'flex', alignItems: 'center', gap: '6px' })}>
+          <StatusTag status={row.status} />
+          {row.fcc_filing_url && (
+            <a
+              href={row.fcc_filing_url}
+              target="_blank"
+              rel="noopener noreferrer"
+              title={`${row.fcc_match_count} FCC filing${row.fcc_match_count > 1 ? 's' : ''} matched`}
+              onClick={(e) => e.stopPropagation()}
+              className={css({
+                color: colors.info || '#3b82f6',
+                fontSize: '11px',
+                fontWeight: 600,
+                textDecoration: 'none',
+                padding: '2px 6px',
+                borderRadius: '4px',
+                backgroundColor: 'rgba(59,130,246,0.1)',
+                ':hover': { backgroundColor: 'rgba(59,130,246,0.2)' },
+              })}
+            >
+              FCC{row.fcc_match_count > 1 ? ` (${row.fcc_match_count})` : ''}
+            </a>
+          )}
+        </span>
+      ),
+      width: '160px',
     },
   ]
 
@@ -165,6 +205,56 @@ export default function BuysPage() {
         emptyMessage="No buys found"
         onRowClick={(row) => router.push(`/ops/buys/${row.id}`)}
       />
+
+      {total > pageSize && (
+        <div className={css({
+          display: 'flex',
+          justifyContent: 'space-between',
+          alignItems: 'center',
+          marginTop: '16px',
+          padding: '0 4px',
+        })}>
+          <span className={css({ fontSize: '13px', color: colors.textMuted })}>
+            {page * pageSize + 1}–{Math.min((page + 1) * pageSize, total)} of {total}
+          </span>
+          <div className={css({ display: 'flex', gap: '8px' })}>
+            <button
+              disabled={page === 0}
+              onClick={() => setPage((p) => Math.max(0, p - 1))}
+              className={css({
+                padding: '6px 14px',
+                fontSize: '12px',
+                fontWeight: 600,
+                borderRadius: '6px',
+                border: `1px solid ${colors.border}`,
+                backgroundColor: colors.bgElevated,
+                color: page === 0 ? colors.textMuted : colors.textPrimary,
+                cursor: page === 0 ? 'not-allowed' : 'pointer',
+                ':hover': { backgroundColor: page === 0 ? undefined : colors.bgSecondary },
+              })}
+            >
+              ← Prev
+            </button>
+            <button
+              disabled={(page + 1) * pageSize >= total}
+              onClick={() => setPage((p) => p + 1)}
+              className={css({
+                padding: '6px 14px',
+                fontSize: '12px',
+                fontWeight: 600,
+                borderRadius: '6px',
+                border: `1px solid ${colors.border}`,
+                backgroundColor: colors.bgElevated,
+                color: (page + 1) * pageSize >= total ? colors.textMuted : colors.textPrimary,
+                cursor: (page + 1) * pageSize >= total ? 'not-allowed' : 'pointer',
+                ':hover': { backgroundColor: (page + 1) * pageSize >= total ? undefined : colors.bgSecondary },
+              })}
+            >
+              Next →
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   )
 }

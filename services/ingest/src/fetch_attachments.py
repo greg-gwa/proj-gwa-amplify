@@ -79,7 +79,7 @@ async def fetch_mailgun_attachments(body: dict) -> list[dict]:
 
     files = []
     try:
-        async with httpx.AsyncClient() as client:
+        async with httpx.AsyncClient(timeout=30.0) as client:
             # Fetch the stored message (JSON format includes attachment URLs)
             resp = await client.get(
                 message_url,

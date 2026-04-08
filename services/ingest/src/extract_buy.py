@@ -23,6 +23,7 @@ Rules:
 - Extract station rep contact info (name, email, phone)
 - If multiple buys for different spenders appear (e.g., a master order list), extract ALL of them
 - Classify the spender: type (PAC, Campaign Committee, Party, Issue Org, Super PAC, Unknown), party (Democrat, Republican, Nonpartisan, Unknown)
+- Extract daypart/rotation detail when available: program name, daypart label (Early Morning, Daytime, Prime, Late News, Weekend, Overnight, etc.), days of week, time window (24h format), rate per spot, spots per week, total spots. Omit the dayparts array if the sheet only has weekly totals with no time/program breakdown.
 - Set confidence 0.0-1.0
 
 Return valid JSON:
@@ -47,6 +48,19 @@ Return valid JSON:
           "total_dollars": 126200.00,
           "weekly_breakdown": [
             {"week_start": "2025-05-27", "dollars": 126200.00}
+          ],
+          "dayparts": [
+            {
+              "daypart": "Early Morning News",
+              "program": "Eyewitness News",
+              "days": "M-F",
+              "time_start": "05:00",
+              "time_end": "07:00",
+              "rate_per_spot": 150.00,
+              "spots_per_week": 10,
+              "total_spots": 20,
+              "total_dollars": 3000.00
+            }
           ]
         }
       ],
@@ -210,6 +224,26 @@ async def extract_buy(full_content: str, email_id: str) -> dict:
                         _parse_date(week.get("week_end")),
                         week.get("dollars"),
                         week.get("spots"),
+                        now,
+                    )
+
+                # Insert daypart/rotation detail
+                for dp in line.get("dayparts", []):
+                    await conn.execute(
+                        """INSERT INTO buy_line_dayparts (id, buy_line_id, daypart, program,
+                               days, time_start, time_end, rate_per_spot, spots_per_week,
+                               total_spots, total_dollars, created_at)
+                           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)""",
+                        uuid.uuid4(), line_id,
+                        dp.get("daypart"),
+                        dp.get("program"),
+                        dp.get("days"),
+                        dp.get("time_start"),
+                        dp.get("time_end"),
+                        dp.get("rate_per_spot"),
+                        dp.get("spots_per_week"),
+                        dp.get("total_spots"),
+                        dp.get("total_dollars"),
                         now,
                     )
 

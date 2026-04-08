@@ -20,8 +20,13 @@ export async function GET(
         [id]
       ),
       query(
-        `SELECT bl.id, bl.buy_id, bl.station_call_sign, bl.market_name, bl.network,
-                bl.spot_length_seconds, bl.total_dollars,
+        `SELECT bl.id, bl.buy_id,
+                bl.station_call_sign as station_call_letters,
+                bl.station_call_sign as station_name,
+                bl.market_name as station_market,
+                bl.network,
+                bl.spot_length_seconds as spot_length,
+                bl.total_dollars as total_spend,
                 bl.flight_start::TEXT as flight_start,
                 bl.flight_end::TEXT as flight_end,
                 bl.source_contact_name, bl.source_contact_email
@@ -47,7 +52,7 @@ export async function GET(
     if (lineIds.length > 0) {
       weeks = await query(
         `SELECT blw.id, blw.buy_line_id, blw.week_start::TEXT as week_start,
-                blw.week_end::TEXT as week_end, blw.dollars, blw.spots
+                blw.week_end::TEXT as week_end, blw.dollars as spend, blw.spots
          FROM buy_line_weeks blw
          WHERE blw.buy_line_id = ANY($1)
          ORDER BY blw.week_start`,

@@ -10,7 +10,10 @@ export function formatCurrency(value: number | null | undefined): string {
 
 export function formatDate(value: string | null | undefined): string {
   if (!value) return '—'
-  const d = new Date(value)
+  // Date-only strings (YYYY-MM-DD) are parsed as UTC by JS.
+  // Append T12:00:00 to avoid timezone shift rendering the wrong day.
+  const raw = String(value)
+  const d = raw.length === 10 ? new Date(raw + 'T12:00:00') : new Date(raw)
   return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
 }
 

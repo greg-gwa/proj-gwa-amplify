@@ -23,7 +23,7 @@ from src.build_monitors import create_monitors_for_contract
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s: %(message)s")
 log = logging.getLogger("batch_parse")
 
-CONCURRENCY = 5
+CONCURRENCY = 20
 MAX_RETRIES = 2
 DOWNLOAD_TIMEOUT = 90.0
 COST_PER_PARSE = 0.02

@@ -60,10 +60,11 @@ async def inbound(request: Request):
         logger.info(f"Inbound POST. subject={body.get('subject')}, "
                    f"parsed_files={len(files)}, mailgun_attachment_count={attachment_count}")
 
-        # If Mailgun says there are attachments but we didn't parse any,
-        # fetch them from Mailgun's stored message API
-        if attachment_count > 0 and len(files) == 0:
-            logger.info("Attachments missing from form data — fetching from Mailgun API")
+        # Always try Mailgun stored message API if no files parsed from form data.
+        # Gmail-forwarded emails often have attachments that Mailgun doesn't include
+        # in the webhook form data (attachment-count: 0), but they ARE in storage.
+        if len(files) == 0:
+            logger.info("No files in form data — fetching from Mailgun storage API")
             mg_files = await fetch_mailgun_attachments(body)
             files.extend(mg_files)
             logger.info(f"Fetched {len(mg_files)} attachments from Mailgun API")
@@ -92,7 +93,7 @@ async def clip(request: Request):
 
 @app.post("/scan")
 async def scan_radar(request: Request):
-    """FCC radar scan — queries FCC API for new political filings."""
+    """FCC radar scan — blocks until complete so Cloud Run keeps the instance alive."""
     try:
         body = {}
         try:
@@ -106,9 +107,9 @@ async def scan_radar(request: Request):
 
         pool = await get_pool()
         async with pool.acquire() as conn:
-            result = await scan(conn, stations=stations, markets=markets, lookback_hours=lookback_hours)
+            result = await scan(conn, stations=stations, markets=markets, lookback_hours=lookback_hours, pool=pool)
 
-        return {"ok": True, **result}
+        return {"ok": True, "status": "scan_complete", "result": result}
     except Exception as e:
         logger.exception("Scan error")
         return JSONResponse(status_code=500, content={"ok": False, "error": str(e)})

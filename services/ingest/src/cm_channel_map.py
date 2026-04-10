@@ -53,7 +53,7 @@ async def build_channel_map(pool, cm: CMClient) -> dict[str, int]:
 
         if not cid:
             # Try stripping common suffixes: -HD, -DT, HD, DT
-            for suffix in ("-HD", "-DT", " HD", " DT"):
+            for suffix in ("-HD", "-DT", "-TV", "-FM", "-AM", " HD", " DT"):
                 stripped = upper.removesuffix(suffix)
                 if stripped != upper:
                     cid = cm_lookup.get(stripped)

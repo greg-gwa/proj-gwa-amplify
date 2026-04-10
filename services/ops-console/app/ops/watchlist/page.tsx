@@ -83,6 +83,7 @@ interface Monitor {
   flight_end: string
   status: string
   matches_found: number
+  source: 'fcc' | 'buy'
 }
 
 interface MonitorStats {
@@ -572,6 +573,19 @@ export default function WatchlistPage() {
       render: (row: Monitor) => (
         <span className={css({ color: Number(row.matches_found) > 0 ? colors.success : colors.textMuted, fontWeight: Number(row.matches_found) > 0 ? 600 : 400 })}>
           {row.matches_found}
+        </span>
+      ),
+    },
+    {
+      header: 'Source',
+      id: 'source',
+      width: '70px',
+      render: (row: Monitor) => (
+        <span
+          title={row.source === 'fcc' ? 'FCC filing' : 'Email buy'}
+          className={css({ fontSize: '16px', cursor: 'default' })}
+        >
+          {row.source === 'fcc' ? '\uD83C\uDFDB\uFE0F' : '\uD83D\uDCE7'}
         </span>
       ),
     },

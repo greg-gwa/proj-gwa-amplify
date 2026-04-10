@@ -1,7 +1,7 @@
 """
 CM Ad Scanner — core scan logic.
 
-For each active monitor:
+For each active monitor window (derived live from radar_items + buy_lines):
   Pass 1: CC keyword search ("approve this message", "paid for by")
   Pass 2: CC gap scan (find silent breaks → Whisper transcribe)
 Both passes download HLS clips via ffmpeg, transcribe via Whisper, pattern-match,
@@ -9,6 +9,7 @@ and insert confirmed political ads into ad_clips.
 """
 
 import asyncio
+import json
 import logging
 import os
 import re
@@ -60,6 +61,81 @@ def _extract_paid_for_by(transcript: str) -> Optional[str]:
             return m.group(1).strip()[:300]
     return None
 
+
+# ------------------------------------------------------------------
+# Time string parser (copied from build_monitors.py — that file is deleted)
+# ------------------------------------------------------------------
+
+def parse_time(time_str: str):
+    """Parse time strings like '7a-730a', '10p-1030p', '8-830pm' into (HH:MM, HH:MM).
+
+    If only the end time has an AM/PM suffix, the start time inherits it.
+    e.g., '8-830pm' → 20:00-20:30 (not 08:00-20:30)
+    """
+    if not time_str:
+        return None
+    t = time_str.strip().upper().replace(" ", "")
+    parts = t.split("-")
+    if len(parts) != 2:
+        return None
+
+    start_raw, end_raw = parts[0].strip(), parts[1].strip()
+
+    start_has_pm = "P" in start_raw
+    start_has_am = "A" in start_raw
+    end_has_pm = "P" in end_raw
+    end_has_am = "A" in end_raw
+
+    # If start has no AM/PM suffix, inherit from end
+    if not start_has_pm and not start_has_am:
+        if end_has_pm:
+            start_has_pm = True
+        elif end_has_am:
+            start_has_am = True
+
+    def convert(p, forced_pm=False, forced_am=False):
+        p = p.strip()
+        is_pm = "P" in p or forced_pm
+        is_am = "A" in p or forced_am
+        p = p.replace("A", "").replace("P", "").replace("M", "")
+        if not p:
+            return None
+        if ":" in p:
+            h, m = p.split(":")
+        elif len(p) <= 2:
+            h, m = p, "00"
+        elif len(p) == 3:
+            h, m = p[0], p[1:]
+        elif len(p) == 4:
+            h, m = p[:2], p[2:]
+        else:
+            return None
+        try:
+            h, m = int(h), int(m)
+        except ValueError:
+            return None
+        if is_pm and h < 12:
+            h += 12
+        if is_am and h == 12:
+            h = 0
+        return f"{h:02d}:{m:02d}"
+
+    start = convert(start_raw, forced_pm=start_has_pm and "P" not in start_raw, forced_am=start_has_am and "A" not in start_raw)
+    end = convert(end_raw)
+
+    if start and end:
+        # Sanity: if end < start and start wasn't explicitly AM, start is probably PM too
+        if end < start and not (start_has_am or "A" in start_raw):
+            sh = int(start[:2])
+            if sh < 12:
+                start = f"{sh + 12:02d}:{start[3:]}"
+        return (start, end)
+    return None
+
+
+# ------------------------------------------------------------------
+# Spender fuzzy match
+# ------------------------------------------------------------------
 
 async def _fuzzy_spender(pool, name: str) -> Optional[tuple[str, str]]:
     """Fuzzy-match name against spenders table. Returns (id, name) or None."""
@@ -386,18 +462,116 @@ async def _gap_scan(
 
 
 # ------------------------------------------------------------------
+# Build monitor list from source tables (no monitors table)
+# ------------------------------------------------------------------
+
+async def _fetch_monitors(pool, window_start: date, today: date, market_ids: list[str] | None) -> list[dict]:
+    """
+    Query radar_items + buy_lines directly to produce a deduplicated list of
+    (station_call_sign, spender_name, time_start, time_end, days, flight_start, flight_end).
+
+    parse_time() is applied in Python to the FCC line_item time strings.
+    Results are deduped by (station_call_sign, spender_name, time_start, time_end)
+    and capped at MAX_MONITORS.
+    """
+    MAX_MONITORS = 200
+
+    market_clause = "AND ri.market_id = ANY($3::uuid[])" if market_ids else ""
+    buy_market_clause = "AND bl.market_id = ANY($3::uuid[])" if market_ids else ""
+    date_args: list = [window_start, today]
+    if market_ids:
+        date_args.append(market_ids)
+
+    async with pool.acquire() as conn:
+        fcc_rows = await conn.fetch(
+            f"""SELECT ri.station_call_sign, ri.spender_name,
+                       ri.flight_start, ri.flight_end,
+                       ri.parsed_data->'line_items' AS line_items_json
+                FROM radar_items ri
+                WHERE ri.parsed_data IS NOT NULL
+                  AND jsonb_typeof(ri.parsed_data->'line_items') = 'array'
+                  AND jsonb_array_length(ri.parsed_data->'line_items') > 0
+                  AND ri.flight_end   >= $1
+                  AND ri.flight_start <= $2
+                  {market_clause}""",
+            *date_args,
+        )
+
+        buy_rows = await conn.fetch(
+            f"""SELECT bl.station_call_sign, b.spender_name,
+                       bl.flight_start, bl.flight_end,
+                       bld.time_start, bld.time_end, bld.days
+                FROM buy_lines bl
+                JOIN buys b ON bl.buy_id = b.id
+                JOIN buy_line_dayparts bld ON bld.buy_line_id = bl.id
+                WHERE bl.flight_end   >= $1
+                  AND bl.flight_start <= $2
+                  {buy_market_clause}""",
+            *date_args,
+        )
+
+    monitors_raw: list[dict] = []
+
+    # Expand FCC line items, parse time strings
+    for row in fcc_rows:
+        line_items = row["line_items_json"]
+        if isinstance(line_items, str):
+            line_items = json.loads(line_items)
+        if not isinstance(line_items, list):
+            continue
+        for li in line_items:
+            time_str = li.get("time", "")
+            parsed = parse_time(time_str)
+            if not parsed:
+                continue
+            time_start, time_end = parsed
+            monitors_raw.append({
+                "id": None,
+                "station_call_sign": row["station_call_sign"],
+                "spender_name": row["spender_name"],
+                "time_start": time_start,
+                "time_end": time_end,
+                "days": li.get("days", ""),
+                "flight_start": row["flight_start"],
+                "flight_end": row["flight_end"],
+            })
+
+    # Add buy-line daypart entries
+    for row in buy_rows:
+        monitors_raw.append({
+            "id": None,
+            "station_call_sign": row["station_call_sign"],
+            "spender_name": row["spender_name"],
+            "time_start": row["time_start"] or "00:00",
+            "time_end": row["time_end"] or "23:59",
+            "days": row["days"] or "",
+            "flight_start": row["flight_start"],
+            "flight_end": row["flight_end"],
+        })
+
+    # Dedup by (station_call_sign, spender_name, time_start, time_end)
+    seen: set[tuple] = set()
+    monitors: list[dict] = []
+    for m in monitors_raw:
+        key = (m["station_call_sign"], m["spender_name"], m["time_start"], m["time_end"])
+        if key not in seen:
+            seen.add(key)
+            monitors.append(m)
+
+    return monitors[:MAX_MONITORS]
+
+
+# ------------------------------------------------------------------
 # Main entry point
 # ------------------------------------------------------------------
 
 async def run_cm_scan(scan_id: str, market_ids: list[str] | None = None) -> dict:
     """
-    Execute a CM scan for active monitors scoped to the watchlist.
+    Execute a CM scan for active monitor windows derived from radar_items + buy_lines.
     If market_ids is provided, only scan monitors in those markets.
-    Otherwise scan all active monitors (capped at MAX_MONITORS).
+    Otherwise scan all active windows (capped at MAX_MONITORS).
     Runs as a background asyncio task; updates cm_scans as it progresses.
     """
-    MAX_MONITORS = 200  # safety cap
-
     pool = await get_pool()
 
     async with pool.acquire() as conn:
@@ -412,39 +586,7 @@ async def run_cm_scan(scan_id: str, market_ids: list[str] | None = None) -> dict
         today = date.today()
         window_start = today - timedelta(days=SCAN_WINDOW_DAYS)
 
-        # Fetch active monitors — scoped to watchlist markets if provided
-        async with pool.acquire() as conn:
-            if market_ids:
-                monitors = await conn.fetch(
-                    """SELECT DISTINCT ON (m.station_call_sign, m.spender_name, m.time_start, m.time_end)
-                              m.id::TEXT, m.station_call_sign, m.spender_name,
-                              m.time_start, m.time_end, m.days,
-                              m.flight_start, m.flight_end
-                       FROM monitors m
-                       WHERE m.status = 'active'
-                         AND m.flight_end   >= $1
-                         AND m.flight_start <= $2
-                         AND m.market_id = ANY($3::uuid[])
-                       ORDER BY m.station_call_sign, m.spender_name, m.time_start, m.time_end, m.created_at DESC
-                       LIMIT $4""",
-                    window_start, today, market_ids, MAX_MONITORS,
-                )
-            else:
-                monitors = await conn.fetch(
-                    """SELECT DISTINCT ON (m.station_call_sign, m.spender_name, m.time_start, m.time_end)
-                              m.id::TEXT, m.station_call_sign, m.spender_name,
-                              m.time_start, m.time_end, m.days,
-                              m.flight_start, m.flight_end
-                       FROM monitors m
-                       WHERE m.status = 'active'
-                         AND m.flight_end   >= $1
-                         AND m.flight_start <= $2
-                       ORDER BY m.station_call_sign, m.spender_name, m.time_start, m.time_end, m.created_at DESC
-                       LIMIT $3""",
-                    window_start, today, MAX_MONITORS,
-                )
-
-        monitors = [dict(m) for m in monitors]
+        monitors = await _fetch_monitors(pool, window_start, today, market_ids)
 
         if not monitors:
             async with pool.acquire() as conn:
@@ -454,7 +596,7 @@ async def run_cm_scan(scan_id: str, market_ids: list[str] | None = None) -> dict
                        WHERE id = $1""",
                     scan_id,
                 )
-            logger.info(f"CM scan {scan_id}: no active monitors found")
+            logger.info(f"CM scan {scan_id}: no active monitor windows found")
             return {"status": "complete", "monitors": 0, "clips_found": 0}
 
         # Pre-compute total days for progress tracking

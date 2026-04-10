@@ -13,7 +13,6 @@ from google.cloud import storage as gcs
 from src.fcc_client import FCCClient, parse_fcc_timestamp
 from src.parse_filing import parse_filing_pdf
 from src.match_radar import match_to_spender, match_to_buy
-from src.build_monitors import create_monitors_for_contract
 
 GCS_BUCKET = "amplify-raw-emails"
 GCS_CLIENT = None

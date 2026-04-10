@@ -23,7 +23,7 @@ gcloud run deploy amplify-ops-console \
   --min-instances=0 \
   --max-instances=3 \
   --timeout=60 \
-  --set-env-vars="DATABASE_URL=postgresql://amplify:ZcLiQ5iT8DplSKtwlHBmeAzHJoqIydyH@/amplify?host=/cloudsql/${PROJECT}:${REGION}:amplify-db" \
+  --set-env-vars="DATABASE_URL=postgresql://amplify:ZcLiQ5iT8DplSKtwlHBmeAzHJoqIydyH@/amplify?host=/cloudsql/${PROJECT}:${REGION}:amplify-db,INGEST_URL=https://amplify-ingest-910892119253.us-central1.run.app" \
   --add-cloudsql-instances="${PROJECT}:${REGION}:amplify-db" \
   --quiet
 

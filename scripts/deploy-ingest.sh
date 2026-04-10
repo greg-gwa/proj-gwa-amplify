@@ -27,7 +27,7 @@ gcloud run deploy amplify-ingest \
   --timeout=3600 \
   --no-cpu-throttling \
   --set-env-vars="RAW_BUCKET=amplify-raw-emails,DATABASE_URL=postgresql://amplify:ZcLiQ5iT8DplSKtwlHBmeAzHJoqIydyH@/amplify?host=/cloudsql/${PROJECT}:${REGION}:amplify-db" \
-  --set-secrets="ANTHROPIC_API_KEY=anthropic-api-key:latest,MAILGUN_API_KEY=mailgun-api-key:latest" \
+  --set-secrets="ANTHROPIC_API_KEY=anthropic-api-key:latest,MAILGUN_API_KEY=mailgun-api-key:latest,CM_USERNAME=cm-username:latest,CM_PASSWORD=cm-password:latest,CM_BASE_URL=cm-base-url:latest" \
   --add-cloudsql-instances="${PROJECT}:${REGION}:amplify-db" \
   --quiet
 

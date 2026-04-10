@@ -120,12 +120,21 @@ async def scan_radar(request: Request):
 @app.post("/scan/trigger")
 async def scan_cm_trigger(request: Request):
     """
-    Trigger a CM ad scan for all active monitors.
+    Trigger a CM ad scan scoped to watchlist markets.
+    Accepts optional JSON body: { "market_ids": ["uuid1", "uuid2"] }
     Creates a scan record, starts the scan as a background task,
     and immediately returns the scan_id for status polling.
     """
     try:
         pool = await get_pool()
+
+        # Parse optional market_ids from request body
+        market_ids = None
+        try:
+            body = await request.json()
+            market_ids = body.get("market_ids")
+        except Exception:
+            pass  # No body or invalid JSON is fine — scan all (capped)
 
         # Create the scan record
         scan_id = str(uuid.uuid4())
@@ -137,7 +146,7 @@ async def scan_cm_trigger(request: Request):
             )
 
         # Fire-and-forget: run the scan in the background
-        asyncio.create_task(run_cm_scan(scan_id))
+        asyncio.create_task(run_cm_scan(scan_id, market_ids=market_ids))
 
         logger.info(f"CM scan triggered: {scan_id}")
         return {"ok": True, "scan_id": scan_id, "status": "queued"}

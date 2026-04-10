@@ -1,16 +1,25 @@
-import { NextResponse } from 'next/server'
+import { NextRequest, NextResponse } from 'next/server'
 import { query } from '@/lib/db'
 
 export const dynamic = 'force-dynamic'
 
 const INGEST_URL = process.env.INGEST_URL || 'https://amplify-ingest-910892119253.us-central1.run.app'
 
-// POST /api/watchlist/scan — trigger a CM ad scan
-export async function POST() {
+// POST /api/watchlist/scan — trigger a CM ad scan scoped to watchlist markets
+export async function POST(request: NextRequest) {
   try {
+    // Load watchlist market_ids from radar_config
+    const configRows = await query<{ value: Record<string, unknown> }>(
+      `SELECT value FROM radar_config WHERE key = $1`,
+      ['watch_config']
+    )
+    const config = configRows[0]?.value ?? {}
+    const marketIds = (config.market_ids as string[]) || []
+
     const resp = await fetch(`${INGEST_URL}/scan/trigger`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ market_ids: marketIds.length > 0 ? marketIds : undefined }),
     })
 
     if (!resp.ok) {

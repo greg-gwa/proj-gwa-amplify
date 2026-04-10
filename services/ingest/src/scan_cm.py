@@ -389,11 +389,15 @@ async def _gap_scan(
 # Main entry point
 # ------------------------------------------------------------------
 
-async def run_cm_scan(scan_id: str) -> dict:
+async def run_cm_scan(scan_id: str, market_ids: list[str] | None = None) -> dict:
     """
-    Execute a full CM scan for all active monitors.
+    Execute a CM scan for active monitors scoped to the watchlist.
+    If market_ids is provided, only scan monitors in those markets.
+    Otherwise scan all active monitors (capped at MAX_MONITORS).
     Runs as a background asyncio task; updates cm_scans as it progresses.
     """
+    MAX_MONITORS = 200  # safety cap
+
     pool = await get_pool()
 
     async with pool.acquire() as conn:
@@ -402,24 +406,43 @@ async def run_cm_scan(scan_id: str) -> dict:
             scan_id,
         )
 
-    logger.info(f"CM scan {scan_id} started")
+    logger.info(f"CM scan {scan_id} started (market_ids={len(market_ids) if market_ids else 'all'})")
 
     try:
         today = date.today()
         window_start = today - timedelta(days=SCAN_WINDOW_DAYS)
 
-        # Fetch active monitors within last-7-days window
+        # Fetch active monitors — scoped to watchlist markets if provided
         async with pool.acquire() as conn:
-            monitors = await conn.fetch(
-                """SELECT m.id::TEXT, m.station_call_sign, m.spender_name,
-                          m.time_start, m.time_end, m.days,
-                          m.flight_start, m.flight_end
-                   FROM monitors m
-                   WHERE m.status = 'active'
-                     AND m.flight_end   >= $1
-                     AND m.flight_start <= $2""",
-                window_start, today,
-            )
+            if market_ids:
+                monitors = await conn.fetch(
+                    """SELECT DISTINCT ON (m.station_call_sign, m.spender_name)
+                              m.id::TEXT, m.station_call_sign, m.spender_name,
+                              m.time_start, m.time_end, m.days,
+                              m.flight_start, m.flight_end
+                       FROM monitors m
+                       WHERE m.status = 'active'
+                         AND m.flight_end   >= $1
+                         AND m.flight_start <= $2
+                         AND m.market_id = ANY($3::uuid[])
+                       ORDER BY m.station_call_sign, m.spender_name, m.created_at DESC
+                       LIMIT $4""",
+                    window_start, today, market_ids, MAX_MONITORS,
+                )
+            else:
+                monitors = await conn.fetch(
+                    """SELECT DISTINCT ON (m.station_call_sign, m.spender_name)
+                              m.id::TEXT, m.station_call_sign, m.spender_name,
+                              m.time_start, m.time_end, m.days,
+                              m.flight_start, m.flight_end
+                       FROM monitors m
+                       WHERE m.status = 'active'
+                         AND m.flight_end   >= $1
+                         AND m.flight_start <= $2
+                       ORDER BY m.station_call_sign, m.spender_name, m.created_at DESC
+                       LIMIT $3""",
+                    window_start, today, MAX_MONITORS,
+                )
 
         monitors = [dict(m) for m in monitors]
 

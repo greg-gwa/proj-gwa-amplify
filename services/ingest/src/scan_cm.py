@@ -558,6 +558,10 @@ async def _fetch_monitors(pool, window_start: date, today: date, market_ids: lis
             seen.add(key)
             monitors.append(m)
 
+    logger.info(
+        f"_fetch_monitors: {len(fcc_rows)} FCC rows → {sum(1 for m in monitors_raw if True)} expanded, "
+        f"{len(buy_rows)} buy rows, {len(monitors)} after dedup (cap {MAX_MONITORS})"
+    )
     return monitors[:MAX_MONITORS]
 
 
@@ -618,9 +622,16 @@ async def run_cm_scan(scan_id: str, market_ids: list[str] | None = None) -> dict
             # Build station → channel_id map (one CM request for all channels)
             channel_map = await build_channel_map(pool, cm)
 
-            for monitor in monitors:
+            for mi, monitor in enumerate(monitors):
                 station = monitor["station_call_sign"]
                 channel_id = channel_map.get(station)
+
+                logger.info(
+                    f"[scan {scan_id[:8]}] Monitor {mi+1}/{len(monitors)}: "
+                    f"{station} / {monitor['spender_name'][:40]} / "
+                    f"{monitor['time_start']}-{monitor['time_end']} / "
+                    f"{monitor['flight_start']}→{monitor['flight_end']}"
+                )
 
                 if not channel_id:
                     logger.warning(f"No CM channel for {station} — skipping monitor")
@@ -636,6 +647,15 @@ async def run_cm_scan(scan_id: str, market_ids: list[str] | None = None) -> dict
 
                 current_day = eff_start
                 while current_day <= eff_end:
+                    # Check if scan was killed externally
+                    async with pool.acquire() as conn:
+                        scan_status = await conn.fetchval(
+                            "SELECT status FROM cm_scans WHERE id = $1", scan_id,
+                        )
+                    if scan_status in ("error", "complete"):
+                        logger.info(f"[scan {scan_id[:8]}] Scan was killed externally — stopping")
+                        return {"status": "killed", "clips_found": clips_found}
+
                     if not await cm.check_budget():
                         logger.warning(f"CM scan {scan_id}: budget limit reached — stopping")
                         async with pool.acquire() as conn:
@@ -649,9 +669,22 @@ async def run_cm_scan(scan_id: str, market_ids: list[str] | None = None) -> dict
                             )
                         return {"status": "complete", "clips_found": clips_found, "stopped": "budget"}
 
-                    n_cc = await _cc_search(pool, cm, scan_id, monitor, channel_id, current_day)
-                    n_gap = await _gap_scan(pool, cm, scan_id, monitor, channel_id, current_day)
+                    logger.info(f"[scan {scan_id[:8]}] {station} day={current_day} — starting CC search")
+                    try:
+                        n_cc = await _cc_search(pool, cm, scan_id, monitor, channel_id, current_day)
+                    except Exception as exc:
+                        logger.exception(f"[scan {scan_id[:8]}] CC search error {station} {current_day}: {exc}")
+                        n_cc = 0
+
+                    logger.info(f"[scan {scan_id[:8]}] {station} day={current_day} — CC found {n_cc}, starting gap scan")
+                    try:
+                        n_gap = await _gap_scan(pool, cm, scan_id, monitor, channel_id, current_day)
+                    except Exception as exc:
+                        logger.exception(f"[scan {scan_id[:8]}] Gap scan error {station} {current_day}: {exc}")
+                        n_gap = 0
+
                     clips_found += n_cc + n_gap
+                    logger.info(f"[scan {scan_id[:8]}] {station} day={current_day} — done (cc={n_cc} gap={n_gap} total={clips_found})")
 
                     async with pool.acquire() as conn:
                         await conn.execute(

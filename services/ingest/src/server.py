@@ -1,11 +1,13 @@
 import asyncio
 import logging
+import uuid
 from fastapi import FastAPI, Request, UploadFile
 from fastapi.responses import JSONResponse
 from src.ingest_email import handle_inbound_email
 from src.ingest_clip import handle_clip
 from src.fetch_attachments import fetch_mailgun_attachments
 from src.scan_radar import scan
+from src.scan_cm import run_cm_scan
 from src.db import get_pool, close_pool
 
 logging.basicConfig(level=logging.INFO)
@@ -112,6 +114,61 @@ async def scan_radar(request: Request):
         return {"ok": True, "status": "scan_complete", "result": result}
     except Exception as e:
         logger.exception("Scan error")
+        return JSONResponse(status_code=500, content={"ok": False, "error": str(e)})
+
+
+@app.post("/scan/trigger")
+async def scan_cm_trigger(request: Request):
+    """
+    Trigger a CM ad scan for all active monitors.
+    Creates a scan record, starts the scan as a background task,
+    and immediately returns the scan_id for status polling.
+    """
+    try:
+        pool = await get_pool()
+
+        # Create the scan record
+        scan_id = str(uuid.uuid4())
+        async with pool.acquire() as conn:
+            await conn.execute(
+                """INSERT INTO cm_scans (id, status, created_at)
+                   VALUES ($1, 'queued', NOW())""",
+                scan_id,
+            )
+
+        # Fire-and-forget: run the scan in the background
+        asyncio.create_task(run_cm_scan(scan_id))
+
+        logger.info(f"CM scan triggered: {scan_id}")
+        return {"ok": True, "scan_id": scan_id, "status": "queued"}
+    except Exception as e:
+        logger.exception("CM scan trigger error")
+        return JSONResponse(status_code=500, content={"ok": False, "error": str(e)})
+
+
+@app.get("/scan/{scan_id}/status")
+async def scan_cm_status(scan_id: str):
+    """Return the current progress of a CM scan."""
+    try:
+        pool = await get_pool()
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow(
+                """SELECT id::TEXT, status,
+                          total_monitors, scanned_monitors,
+                          total_days, scanned_days,
+                          clips_found, clips_matched, clips_orphaned,
+                          cm_requests_used,
+                          error_details,
+                          started_at::TEXT, completed_at::TEXT, created_at::TEXT
+                   FROM cm_scans
+                   WHERE id = $1""",
+                scan_id,
+            )
+        if not row:
+            return JSONResponse(status_code=404, content={"ok": False, "error": "Scan not found"})
+        return {"ok": True, "data": dict(row)}
+    except Exception as e:
+        logger.exception("CM scan status error")
         return JSONResponse(status_code=500, content={"ok": False, "error": str(e)})
 
 

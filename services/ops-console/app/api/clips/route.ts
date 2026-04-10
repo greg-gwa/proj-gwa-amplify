@@ -10,6 +10,7 @@ export async function GET(request: NextRequest) {
     const offset = parseInt(searchParams.get('offset') || '0')
     const status = searchParams.get('status')
     const station = searchParams.get('station')
+    const detectionMethod = searchParams.get('detection_method')
 
     const conditions: string[] = []
     const params: unknown[] = []
@@ -25,14 +26,22 @@ export async function GET(request: NextRequest) {
     } else if (status === 'not_relevant') {
       conditions.push(`ac.is_relevant = false`)
     }
+    if (detectionMethod) {
+      conditions.push(`ac.detection_method = $${idx}`)
+      params.push(detectionMethod)
+      idx++
+    }
 
     const where = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : ''
 
     const rows = await query(
       `SELECT ac.id, ac.source_url, ac.source_platform,
-              ac.station_or_channel, ac.clip_duration_seconds, ac.ad_type,
-              ac.advertiser, ac.confidence, ac.is_relevant,
+              ac.station_or_channel, ac.clip_duration_seconds as duration_seconds,
+              ac.ad_type, ac.advertiser, ac.confidence, ac.is_relevant,
               LEFT(ac.transcript, 200) as transcript_excerpt,
+              ac.detection_method, ac.video_storage_path,
+              ac.air_date::TEXT as air_date, ac.air_time,
+              ac.matched_spender_name,
               ac.created_at::TEXT as created_at
        FROM ad_clips ac
        ${where}

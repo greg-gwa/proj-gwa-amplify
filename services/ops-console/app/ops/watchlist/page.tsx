@@ -13,6 +13,29 @@ import { StatusTag } from '@/components/StatusTag'
 import { colors } from '@/theme/customTheme'
 import { formatCurrency, formatDate } from '@/lib/format'
 
+interface CmScan {
+  id: string
+  status: string
+  total_monitors: number
+  scanned_monitors: number
+  total_days: number
+  scanned_days: number
+  clips_found: number
+  clips_matched: number
+  clips_orphaned: number
+  cm_requests_used: number
+  error_details: string | null
+  started_at: string | null
+  completed_at: string | null
+}
+
+interface Budget {
+  total: number
+  used: number
+  remaining: number
+  pct_used: number
+}
+
 type Mode = 'region' | 'spender' | 'candidate'
 
 interface MarketOption {
@@ -122,7 +145,101 @@ export default function WatchlistPage() {
   const [pagination, setPagination] = useState<Pagination>({ page: 1, limit: 15, total: 0, totalPages: 0 })
   const dropdownRef = useRef<HTMLDivElement>(null)
 
+  // CM scan state
+  const [scanning, setScanning] = useState(false)
+  const [scan, setScan] = useState<CmScan | null>(null)
+  const [budget, setBudget] = useState<Budget | null>(null)
+  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null)
+
+  // ------------------------------------------------------------------
+  // CM Scan helpers
+  // ------------------------------------------------------------------
+
+  const fetchBudget = useCallback(() => {
+    fetch('/api/watchlist/scan/budget')
+      .then(r => r.json())
+      .then(d => { if (d.data) setBudget(d.data) })
+      .catch(console.error)
+  }, [])
+
+  const fetchLatestScan = useCallback(() => {
+    fetch('/api/watchlist/scan')
+      .then(r => r.json())
+      .then(d => {
+        if (d.data) {
+          setScan(d.data)
+          if (d.data.status === 'running' || d.data.status === 'queued') {
+            setScanning(true)
+          }
+        }
+      })
+      .catch(console.error)
+  }, [])
+
+  const pollScanStatus = useCallback((scanId: string) => {
+    if (pollRef.current) clearInterval(pollRef.current)
+    pollRef.current = setInterval(() => {
+      fetch(`/api/watchlist/scan/status?scan_id=${scanId}`)
+        .then(r => r.json())
+        .then(d => {
+          if (d.data) {
+            setScan(d.data)
+            if (d.data.status === 'complete' || d.data.status === 'error') {
+              setScanning(false)
+              if (pollRef.current) clearInterval(pollRef.current)
+              fetchBudget()
+            }
+          }
+        })
+        .catch(console.error)
+    }, 3000)
+  }, [fetchBudget])
+
+  const triggerScan = useCallback(async () => {
+    setScanning(true)
+    try {
+      const resp = await fetch('/api/watchlist/scan', { method: 'POST' })
+      const data = await resp.json()
+      if (!resp.ok || !data.scan_id) {
+        alert(`Scan failed: ${data.error || 'Unknown error'}`)
+        setScanning(false)
+        return
+      }
+      // Seed initial scan state
+      setScan({
+        id: data.scan_id,
+        status: 'queued',
+        total_monitors: 0, scanned_monitors: 0,
+        total_days: 0, scanned_days: 0,
+        clips_found: 0, clips_matched: 0, clips_orphaned: 0,
+        cm_requests_used: 0, error_details: null,
+        started_at: null, completed_at: null,
+      })
+      pollScanStatus(data.scan_id)
+    } catch (err) {
+      console.error(err)
+      setScanning(false)
+    }
+  }, [pollScanStatus])
+
+  // On mount: load latest scan + budget
+  useEffect(() => {
+    fetchLatestScan()
+    fetchBudget()
+    return () => { if (pollRef.current) clearInterval(pollRef.current) }
+  }, [fetchLatestScan, fetchBudget])
+
+  // If an in-progress scan exists on load, resume polling
+  useEffect(() => {
+    if (scan && (scan.status === 'running' || scan.status === 'queued')) {
+      pollScanStatus(scan.id)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []) // intentionally run once after first scan load
+
+  // ------------------------------------------------------------------
   // Load initial watchlist config (market IDs) for region mode
+  // ------------------------------------------------------------------
   const fetchConfig = useCallback(() => {
     setLoading(true)
     fetch('/api/watchlist')
@@ -744,9 +861,144 @@ export default function WatchlistPage() {
     )
   }
 
+  // ------------------------------------------------------------------
+  // Scan progress panel
+  // ------------------------------------------------------------------
+
+  const renderScanPanel = () => {
+    if (!scan) return null
+
+    const isRunning = scan.status === 'running' || scan.status === 'queued'
+    const isComplete = scan.status === 'complete'
+    const isError = scan.status === 'error'
+
+    const daysPct = scan.total_days > 0
+      ? Math.round((scan.scanned_days / scan.total_days) * 100)
+      : 0
+
+    const statusText = () => {
+      if (scan.status === 'queued') return 'Queued — waiting for ingest service…'
+      if (isRunning) {
+        const station = 'scanning…'
+        return `Scanning ${station} (${scan.scanned_monitors}/${scan.total_monitors} monitors, ${scan.scanned_days}/${scan.total_days} days)`
+      }
+      if (isComplete) {
+        return `Scan complete. Found ${scan.clips_found} clips (${scan.clips_matched} matched, ${scan.clips_orphaned} orphaned).`
+      }
+      if (isError) return `Scan error: ${scan.error_details || 'unknown'}`
+      return scan.status
+    }
+
+    const panelBorder = isError ? colors.error : isComplete ? colors.success : colors.primary
+
+    return (
+      <div
+        className={css({
+          backgroundColor: colors.bgElevated,
+          borderRadius: '12px',
+          border: `1px solid ${panelBorder}`,
+          padding: '16px 20px',
+          marginBottom: '20px',
+        })}
+      >
+        <div className={css({ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '10px' })}>
+          <div>
+            <div className={css({ fontSize: '13px', fontWeight: 600, color: colors.textPrimary, marginBottom: '4px' })}>
+              {isRunning ? 'Scanning for Ads…' : isComplete ? 'Scan Complete' : 'Scan Status'}
+            </div>
+            <div className={css({ fontSize: '12px', color: colors.textSecondary })}>
+              {statusText()}
+            </div>
+          </div>
+          {budget && (
+            <div className={css({ textAlign: 'right', fontSize: '12px' })}>
+              <div className={css({ color: colors.textMuted })}>CM Budget</div>
+              <div className={css({ fontWeight: 600, color: budget.remaining < 100 ? colors.error : colors.textPrimary })}>
+                {budget.remaining.toLocaleString()} / {budget.total.toLocaleString()} remaining
+              </div>
+            </div>
+          )}
+        </div>
+
+        {/* Progress bar */}
+        {(isRunning || isComplete) && scan.total_days > 0 && (
+          <div className={css({ marginBottom: '10px' })}>
+            <div className={css({ display: 'flex', justifyContent: 'space-between', fontSize: '11px', color: colors.textMuted, marginBottom: '4px' })}>
+              <span>{scan.scanned_days} / {scan.total_days} days scanned</span>
+              <span>{daysPct}%</span>
+            </div>
+            <div className={css({ height: '6px', backgroundColor: colors.bgSecondary, borderRadius: '3px', overflow: 'hidden' })}>
+              <div
+                className={css({
+                  height: '100%',
+                  width: `${daysPct}%`,
+                  backgroundColor: isComplete ? colors.success : colors.primary,
+                  borderRadius: '3px',
+                  transition: 'width 0.4s ease',
+                })}
+              />
+            </div>
+          </div>
+        )}
+
+        {/* Stats row */}
+        <div className={css({ display: 'flex', gap: '20px', fontSize: '12px', color: colors.textSecondary })}>
+          <span>Monitors: <strong className={css({ color: colors.textPrimary })}>{scan.scanned_monitors}/{scan.total_monitors}</strong></span>
+          <span>Clips found: <strong className={css({ color: scan.clips_found > 0 ? colors.success : colors.textPrimary })}>{scan.clips_found}</strong></span>
+          {isComplete && (
+            <>
+              <span>Matched: <strong className={css({ color: colors.success })}>{scan.clips_matched}</strong></span>
+              <span>Orphaned: <strong className={css({ color: colors.warning })}>{scan.clips_orphaned}</strong></span>
+              <a
+                href="/ops/clips"
+                className={css({ color: colors.primary, fontWeight: 600, textDecoration: 'none', ':hover': { textDecoration: 'underline' } })}
+              >
+                View Clips →
+              </a>
+            </>
+          )}
+          {scan.cm_requests_used > 0 && (
+            <span className={css({ marginLeft: 'auto' })}>CM requests used this scan: <strong>{scan.cm_requests_used}</strong></span>
+          )}
+        </div>
+      </div>
+    )
+  }
+
   return (
     <div>
       <PageHeader title="Watchlist" subtitle={MODE_SUBTITLES[mode]} />
+
+      {/* Top action bar: scan button + budget */}
+      <div className={css({ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' })}>
+        <div className={css({ display: 'flex', gap: '8px', alignItems: 'center' })}>
+          <Button
+            kind={KIND.primary}
+            size={SIZE.compact}
+            disabled={scanning}
+            onClick={triggerScan}
+            overrides={{
+              BaseButton: {
+                style: {
+                  paddingLeft: '16px',
+                  paddingRight: '16px',
+                  fontSize: '13px',
+                },
+              },
+            }}
+          >
+            {scanning ? 'Scanning…' : 'Scan for Ads'}
+          </Button>
+          {!scan && budget && (
+            <span className={css({ fontSize: '12px', color: colors.textMuted })}>
+              CM budget: {budget.remaining.toLocaleString()} requests remaining
+            </span>
+          )}
+        </div>
+      </div>
+
+      {/* Scan progress panel */}
+      {renderScanPanel()}
 
       {/* Mode Toggle */}
       <div className={css({ marginBottom: '20px' })}>

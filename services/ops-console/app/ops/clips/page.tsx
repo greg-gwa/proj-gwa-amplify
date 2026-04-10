@@ -13,7 +13,8 @@ import { formatDate, formatPercent } from '@/lib/format'
 
 interface Clip {
   id: string
-  air_date: string
+  air_date: string | null
+  air_time: string | null
   station_or_channel: string
   duration_seconds: number
   ad_type: string
@@ -22,6 +23,9 @@ interface Clip {
   confidence: number
   status: string
   transcript_excerpt: string
+  detection_method: string | null
+  video_storage_path: string | null
+  matched_spender_name: string | null
   created_at: string
 }
 
@@ -34,12 +38,19 @@ const statusOptions = [
   { id: 'dismissed', label: 'Dismissed' },
 ]
 
+const detectionOptions = [
+  { id: '', label: 'All Sources' },
+  { id: 'cc_search', label: 'CC Search' },
+  { id: 'gap_scan', label: 'Gap Scan' },
+]
+
 export default function ClipsPage() {
   const [css] = useStyletron()
   const [clips, setClips] = useState<Clip[]>([])
   const [loading, setLoading] = useState(true)
   const [stationFilter, setStationFilter] = useState('')
   const [statusFilter, setStatusFilter] = useState<Array<{ id: string }>>([])
+  const [detectionFilter, setDetectionFilter] = useState<Array<{ id: string }>>([])
   const [uploadUrl, setUploadUrl] = useState('')
 
   const fetchData = useCallback(() => {
@@ -48,22 +59,43 @@ export default function ClipsPage() {
     if (stationFilter) params.set('station', stationFilter)
     const status = statusFilter[0]?.id
     if (status) params.set('status', status)
+    const detection = detectionFilter[0]?.id
+    if (detection) params.set('detection_method', detection)
     fetch(`/api/clips?${params}`)
       .then((r) => r.json())
       .then((data) => setClips(data.data || []))
       .catch(console.error)
       .finally(() => setLoading(false))
-  }, [stationFilter, statusFilter])
+  }, [stationFilter, statusFilter, detectionFilter])
 
   useEffect(() => {
     fetchData()
   }, [fetchData])
 
+  const detectionLabel = (method: string | null) => {
+    if (method === 'cc_search') return 'CC Search'
+    if (method === 'gap_scan') return 'Gap Scan'
+    return null
+  }
+
+  const detectionColor = (method: string | null) => {
+    if (method === 'cc_search') return '#3b82f6'
+    if (method === 'gap_scan') return '#8b5cf6'
+    return colors.textMuted
+  }
+
   const columns = [
     {
       header: 'Date',
       id: 'date',
-      render: (row: Clip) => formatDate(row.air_date),
+      render: (row: Clip) => (
+        <span className={css({ fontSize: '12px', color: colors.textSecondary })}>
+          {row.air_date ? formatDate(row.air_date) : '—'}
+          {row.air_time ? (
+            <span className={css({ display: 'block', fontSize: '11px', color: colors.textMuted })}>{row.air_time}</span>
+          ) : null}
+        </span>
+      ),
       width: '100px',
     },
     {
@@ -75,21 +107,49 @@ export default function ClipsPage() {
       width: '100px',
     },
     {
+      header: 'Detection',
+      id: 'detection',
+      render: (row: Clip) => {
+        const label = detectionLabel(row.detection_method)
+        if (!label) return <span className={css({ color: colors.textMuted, fontSize: '12px' })}>—</span>
+        return (
+          <span
+            className={css({
+              fontSize: '11px',
+              fontWeight: 600,
+              color: detectionColor(row.detection_method),
+              backgroundColor: `${detectionColor(row.detection_method)}20`,
+              borderRadius: '4px',
+              padding: '2px 6px',
+              whiteSpace: 'nowrap',
+            })}
+          >
+            {label}
+          </span>
+        )
+      },
+      width: '100px',
+    },
+    {
       header: 'Duration',
       id: 'duration',
       render: (row: Clip) => (row.duration_seconds ? `${row.duration_seconds}s` : '—'),
-      width: '80px',
+      width: '70px',
     },
     {
       header: 'Type',
       id: 'type',
       render: (row: Clip) => row.ad_type || '—',
-      width: '90px',
+      width: '80px',
     },
     {
       header: 'Advertiser',
       id: 'advertiser',
-      render: (row: Clip) => row.advertiser || '—',
+      render: (row: Clip) => (
+        <span className={css({ fontWeight: 500 })}>
+          {row.advertiser || row.matched_spender_name || '—'}
+        </span>
+      ),
     },
     {
       header: 'Transcript',
@@ -101,6 +161,30 @@ export default function ClipsPage() {
             : '—'}
         </span>
       ),
+    },
+    {
+      header: 'Video',
+      id: 'video',
+      render: (row: Clip) =>
+        row.video_storage_path ? (
+          <a
+            href={`/api/clips/${row.id}/video`}
+            target="_blank"
+            rel="noopener noreferrer"
+            className={css({
+              color: colors.primary,
+              textDecoration: 'none',
+              fontSize: '12px',
+              fontWeight: 500,
+              ':hover': { textDecoration: 'underline' },
+            })}
+          >
+            Watch
+          </a>
+        ) : (
+          <span className={css({ color: colors.textMuted, fontSize: '12px' })}>—</span>
+        ),
+      width: '60px',
     },
     {
       header: 'Buy',
@@ -132,7 +216,7 @@ export default function ClipsPage() {
       header: 'Status',
       id: 'status',
       render: (row: Clip) => <StatusTag status={row.status} />,
-      width: '120px',
+      width: '100px',
     },
   ]
 
@@ -187,6 +271,17 @@ export default function ClipsPage() {
             value={statusFilter}
             placeholder="Status"
             onChange={({ value }) => setStatusFilter(value as Array<{ id: string }>)}
+            clearable
+            size={SIZE.compact}
+            overrides={{ Root: { style: { backgroundColor: colors.bgElevated } } }}
+          />
+        </div>
+        <div className={css({ width: '180px' })}>
+          <Select
+            options={detectionOptions}
+            value={detectionFilter}
+            placeholder="Detection source"
+            onChange={({ value }) => setDetectionFilter(value as Array<{ id: string }>)}
             clearable
             size={SIZE.compact}
             overrides={{ Root: { style: { backgroundColor: colors.bgElevated } } }}

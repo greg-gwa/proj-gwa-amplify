@@ -416,7 +416,7 @@ async def run_cm_scan(scan_id: str, market_ids: list[str] | None = None) -> dict
         async with pool.acquire() as conn:
             if market_ids:
                 monitors = await conn.fetch(
-                    """SELECT DISTINCT ON (m.station_call_sign, m.spender_name)
+                    """SELECT DISTINCT ON (m.station_call_sign, m.spender_name, m.time_start, m.time_end)
                               m.id::TEXT, m.station_call_sign, m.spender_name,
                               m.time_start, m.time_end, m.days,
                               m.flight_start, m.flight_end
@@ -425,13 +425,13 @@ async def run_cm_scan(scan_id: str, market_ids: list[str] | None = None) -> dict
                          AND m.flight_end   >= $1
                          AND m.flight_start <= $2
                          AND m.market_id = ANY($3::uuid[])
-                       ORDER BY m.station_call_sign, m.spender_name, m.created_at DESC
+                       ORDER BY m.station_call_sign, m.spender_name, m.time_start, m.time_end, m.created_at DESC
                        LIMIT $4""",
                     window_start, today, market_ids, MAX_MONITORS,
                 )
             else:
                 monitors = await conn.fetch(
-                    """SELECT DISTINCT ON (m.station_call_sign, m.spender_name)
+                    """SELECT DISTINCT ON (m.station_call_sign, m.spender_name, m.time_start, m.time_end)
                               m.id::TEXT, m.station_call_sign, m.spender_name,
                               m.time_start, m.time_end, m.days,
                               m.flight_start, m.flight_end
@@ -439,7 +439,7 @@ async def run_cm_scan(scan_id: str, market_ids: list[str] | None = None) -> dict
                        WHERE m.status = 'active'
                          AND m.flight_end   >= $1
                          AND m.flight_start <= $2
-                       ORDER BY m.station_call_sign, m.spender_name, m.created_at DESC
+                       ORDER BY m.station_call_sign, m.spender_name, m.time_start, m.time_end, m.created_at DESC
                        LIMIT $3""",
                     window_start, today, MAX_MONITORS,
                 )

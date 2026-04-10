@@ -259,16 +259,19 @@ async def _process_clip(
         video_path = os.path.join(tmpdir, f"{clip_uuid}.mp4")
         audio_path = os.path.join(tmpdir, f"{clip_uuid}.wav")
 
-        # Download
-        ok = await _download_hls(hls_url, video_path)
-        if not ok or not os.path.exists(video_path) or os.path.getsize(video_path) == 0:
-            logger.debug(f"HLS download failed: {hls_url[:80]}")
-            return None
-
-        # Determine transcript
+        # If we already have a CC transcript, skip the expensive HLS download
+        # (Pass 1 provides CC text; Pass 2 gap scan needs Whisper so must download)
         if cc_transcript and len(cc_transcript.strip()) > 20:
             transcript = cc_transcript
+            video_storage_path = None  # No video for CC-detected clips (download later if needed)
         else:
+            # Download HLS stream
+            ok = await _download_hls(hls_url, video_path)
+            if not ok or not os.path.exists(video_path) or os.path.getsize(video_path) == 0:
+                logger.debug(f"HLS download failed: {hls_url[:80]}")
+                return None
+
+            # Extract audio and transcribe
             ok = await _extract_audio(video_path, audio_path)
             if not ok:
                 return None
@@ -276,17 +279,13 @@ async def _process_clip(
             if not transcript:
                 return None
 
-        # Pattern match
-        if not _is_political(transcript):
-            return None
-
-        # Upload video to GCS
-        gcs_path = f"clips/{air_date.isoformat()}/{clip_uuid}.mp4"
-        try:
-            video_storage_path = await _upload_gcs(video_path, gcs_path)
-        except Exception as exc:
-            logger.warning(f"GCS upload failed for {clip_uuid}: {exc}")
-            video_storage_path = None
+            # Upload video to GCS
+            gcs_path = f"clips/{air_date.isoformat()}/{clip_uuid}.mp4"
+            try:
+                video_storage_path = await _upload_gcs(video_path, gcs_path)
+            except Exception as exc:
+                logger.warning(f"GCS upload failed for {clip_uuid}: {exc}")
+                video_storage_path = None
 
         # Match spender
         matched_spender_id: Optional[str] = None

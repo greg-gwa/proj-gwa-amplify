@@ -1,12 +1,16 @@
+import { randomUUID } from 'crypto'
 import { NextRequest, NextResponse } from 'next/server'
+import { v2 } from '@google-cloud/run'
 import { query } from '@/lib/db'
 
 export const dynamic = 'force-dynamic'
 
-const INGEST_URL = process.env.INGEST_URL || 'https://amplify-ingest-910892119253.us-central1.run.app'
+const GCP_PROJECT  = process.env.GCP_PROJECT  || 'proj-amplify'
+const GCP_LOCATION = process.env.GCP_LOCATION || 'us-central1'
+const CLOUD_RUN_JOB = process.env.CLOUD_RUN_JOB || 'amplify-ingest-job'
 
 // POST /api/watchlist/scan — trigger a CM ad scan scoped to watchlist markets
-export async function POST(request: NextRequest) {
+export async function POST(_request: NextRequest) {
   try {
     // Load watchlist market_ids from radar_config
     const configRows = await query<{ value: Record<string, unknown> }>(
@@ -16,19 +20,32 @@ export async function POST(request: NextRequest) {
     const config = configRows[0]?.value ?? {}
     const marketIds = (config.market_ids as string[]) || []
 
-    const resp = await fetch(`${INGEST_URL}/scan/trigger`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ market_ids: marketIds.length > 0 ? marketIds : undefined }),
-    })
+    // Create the scan record so the caller can immediately poll for status
+    const scanId = randomUUID()
+    await query(
+      `INSERT INTO cm_scans (id, status, created_at) VALUES ($1, 'queued', NOW())`,
+      [scanId]
+    )
 
-    if (!resp.ok) {
-      const text = await resp.text()
-      return NextResponse.json({ error: `Ingest service error: ${text}` }, { status: 502 })
+    // Build env var overrides for the job execution
+    const envOverrides: { name: string; value: string }[] = [
+      { name: 'SCAN_ID', value: scanId },
+    ]
+    if (marketIds.length > 0) {
+      envOverrides.push({ name: 'MARKET_IDS', value: JSON.stringify(marketIds) })
     }
 
-    const data = await resp.json()
-    return NextResponse.json({ ok: true, scan_id: data.scan_id, status: data.status })
+    // Execute the Cloud Run Job (fire-and-forget — do NOT await the operation result)
+    const jobsClient = new v2.JobsClient()
+    const jobName = `projects/${GCP_PROJECT}/locations/${GCP_LOCATION}/jobs/${CLOUD_RUN_JOB}`
+    await jobsClient.runJob({
+      name: jobName,
+      overrides: {
+        containerOverrides: [{ env: envOverrides }],
+      },
+    })
+
+    return NextResponse.json({ ok: true, scan_id: scanId, status: 'queued' })
   } catch (error) {
     const msg = error instanceof Error ? error.message : String(error)
     return NextResponse.json({ error: msg }, { status: 500 })

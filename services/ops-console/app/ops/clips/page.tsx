@@ -45,6 +45,26 @@ export default function ClipsPage() {
   const [stationFilter, setStationFilter] = useState('')
   const [detectionFilter, setDetectionFilter] = useState<Array<{ id: string }>>([])
   const [expandedId, setExpandedId] = useState<string | null>(null)
+  const [deletingId, setDeletingId] = useState<string | null>(null)
+
+  const handleDelete = async (clipId: string) => {
+    if (!confirm('Delete this clip and its video from storage?')) return
+    setDeletingId(clipId)
+    try {
+      const res = await fetch(`/api/clips/${clipId}`, { method: 'DELETE' })
+      if (res.ok) {
+        setClips((prev) => prev.filter((c) => c.id !== clipId))
+      } else {
+        const data = await res.json()
+        alert(`Delete failed: ${data.error || 'Unknown error'}`)
+      }
+    } catch (err) {
+      console.error('Delete error:', err)
+      alert('Delete failed — check console')
+    } finally {
+      setDeletingId(null)
+    }
+  }
 
   const fetchData = useCallback(() => {
     setLoading(true)
@@ -278,7 +298,28 @@ export default function ClipsPage() {
                   </div>
 
                   {/* Links row */}
-                  <div className={css({ display: 'flex', gap: '12px', marginTop: '12px', flexWrap: 'wrap', borderTop: `1px solid ${colors.border}`, paddingTop: '10px' })}>
+                  <div className={css({ display: 'flex', gap: '12px', marginTop: '12px', flexWrap: 'wrap', borderTop: `1px solid ${colors.border}`, paddingTop: '10px', alignItems: 'center' })}>
+                    <button
+                      onClick={(e) => { e.stopPropagation(); handleDelete(clip.id) }}
+                      disabled={deletingId === clip.id}
+                      className={css({
+                        fontSize: '10px',
+                        fontWeight: 600,
+                        color: deletingId === clip.id ? colors.textMuted : '#ef4444',
+                        backgroundColor: 'transparent',
+                        border: '1px solid #ef444440',
+                        borderRadius: '6px',
+                        padding: '3px 10px',
+                        cursor: deletingId === clip.id ? 'wait' : 'pointer',
+                        transition: 'all 0.15s',
+                        ':hover': {
+                          backgroundColor: '#ef444415',
+                          borderColor: '#ef4444',
+                        },
+                      })}
+                    >
+                      {deletingId === clip.id ? 'Deleting…' : '🗑 Delete'}
+                    </button>
                     {clip.creative_first_aired && (
                       <span className={css({ fontSize: '10px', color: colors.textMuted })}>
                         First seen {formatDate(clip.creative_first_aired)}{clip.creative_first_station ? ` on ${clip.creative_first_station}` : ''}

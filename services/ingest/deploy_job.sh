@@ -1,13 +1,4 @@
 #!/usr/bin/env bash
-# deploy_job.sh — Create or update the amplify-ingest-job Cloud Run Job.
-#
-# Usage:
-#   ./deploy_job.sh                   # create (or update) the job
-#   ./deploy_job.sh --execute <uuid>  # execute the job immediately with a given SCAN_ID
-#
-# Prerequisites:
-#   gcloud auth login && gcloud config set project proj-amplify
-#   IMAGE must be a fully-pushed container image (build & push before running this)
 set -euo pipefail
 
 PROJECT="proj-amplify"
@@ -15,52 +6,33 @@ REGION="us-central1"
 JOB_NAME="amplify-ingest-job"
 SERVICE_ACCOUNT="amplify-deploy@${PROJECT}.iam.gserviceaccount.com"
 
-# Image to use — override with IMAGE env var if needed
-IMAGE="${IMAGE:-gcr.io/${PROJECT}/ingest:latest}"
+# The same exact image that runs the web service
+IMAGE="${IMAGE:-us-central1-docker.pkg.dev/proj-amplify/amplify-app/amplify-ingest:latest}"
 
 echo "==> Deploying Cloud Run Job: ${JOB_NAME}"
-echo "    Image: ${IMAGE}"
 
-# gcloud run jobs create fails if the job already exists, so try update first
-if gcloud run jobs describe "${JOB_NAME}" --region="${REGION}" --project="${PROJECT}" &>/dev/null; then
-  echo "==> Job exists — updating..."
-  gcloud run jobs update "${JOB_NAME}" \
-    --region="${REGION}" \
-    --project="${PROJECT}" \
-    --image="${IMAGE}"
-else
-  echo "==> Job not found — creating..."
-  gcloud run jobs create "${JOB_NAME}" \
-    --region="${REGION}" \
-    --project="${PROJECT}" \
-    --image="${IMAGE}" \
-    --command="python" \
-    --args="-m,src.run_job" \
-    --service-account="${SERVICE_ACCOUNT}" \
-    --memory="2Gi" \
-    --cpu="2" \
-    --task-timeout="3600" \
-    --max-retries="0" \
-    --set-secrets="DATABASE_URL=amplify-db-url:latest"
+# We need the Cloud SQL instance connection name for the job to mount the socket
+SQL_INSTANCE="proj-amplify:us-central1:amplify-db"
+DB_URL="postgresql://amplify:ZcLiQ5iT8DplSKtwlHBmeAzHJoqIydyH@/amplify?host=/cloudsql/${SQL_INSTANCE}"
+
+CMD="gcloud run jobs update"
+if ! gcloud run jobs describe "${JOB_NAME}" --region="${REGION}" --project="${PROJECT}" &>/dev/null; then
+  CMD="gcloud run jobs create"
 fi
 
-echo ""
-echo "==> Done. Job '${JOB_NAME}' is ready in ${REGION}."
-echo ""
-echo "To trigger a scan manually:"
-echo "  gcloud run jobs execute ${JOB_NAME} \\"
-echo "    --region=${REGION} \\"
-echo "    --update-env-vars=SCAN_ID=<uuid> \\"
-echo "    --update-env-vars=MARKET_IDS='[\"<market-uuid>\"]'"
+$CMD "${JOB_NAME}" \
+  --region="${REGION}" \
+  --project="${PROJECT}" \
+  --image="${IMAGE}" \
+  --command="python" \
+  --args="-m,src.run_job" \
+  --service-account="${SERVICE_ACCOUNT}" \
+  --memory="4Gi" \
+  --cpu="2" \
+  --task-timeout="10800" \
+  --max-retries="0" \
+  --set-cloudsql-instances="${SQL_INSTANCE}" \
+  --set-env-vars="DATABASE_URL=${DB_URL},RAW_BUCKET=amplify-raw-emails" \
+  --set-secrets="ANTHROPIC_API_KEY=anthropic-api-key:latest,MAILGUN_API_KEY=mailgun-api-key:latest,OPENAI_API_KEY=openai-api-key:latest,CM_USERNAME=cm-username:latest,CM_PASSWORD=cm-password:latest,CM_BASE_URL=cm-base-url:latest"
 
-# --execute flag: run the job immediately for a given SCAN_ID
-if [[ "${1:-}" == "--execute" ]]; then
-  SCAN_ID="${2:?'Usage: deploy_job.sh --execute <scan_id>'}"
-  echo ""
-  echo "==> Executing job with SCAN_ID=${SCAN_ID} ..."
-  gcloud run jobs execute "${JOB_NAME}" \
-    --region="${REGION}" \
-    --project="${PROJECT}" \
-    --update-env-vars="SCAN_ID=${SCAN_ID}"
-  echo "==> Execution started."
-fi
+echo "==> Job '${JOB_NAME}' is ready."

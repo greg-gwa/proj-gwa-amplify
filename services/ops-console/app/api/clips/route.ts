@@ -32,7 +32,7 @@ type ClipRow = Record<string, unknown> & {
 }
 
 function clusterByTranscript(clips: ClipRow[]): ClipRow[] {
-  const THRESHOLD = 0.80
+  const THRESHOLD = 0.50
 
   type Cluster = {
     headTranscript: string

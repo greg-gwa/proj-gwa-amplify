@@ -79,7 +79,9 @@ function clusterByTranscript(clips: ClipRow[]): ClipRow[] {
     })
   }
 
-  return clusters.flatMap((c) => c.clips)
+  return clusters.flatMap((c) =>
+    c.clips.map((clip, i) => ({ ...clip, is_cluster_duplicate: i > 0 }))
+  )
 }
 
 // --- Route handler ---

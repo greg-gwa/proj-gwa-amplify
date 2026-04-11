@@ -31,6 +31,7 @@ interface Clip {
   creative_first_aired: string | null
   creative_title: string | null
   created_at: string
+  is_cluster_duplicate: boolean
 }
 
 const detectionOptions = [
@@ -48,6 +49,7 @@ export default function ClipsPage() {
   const [expandedId, setExpandedId] = useState<string | null>(null)
   const [deletingId, setDeletingId] = useState<string | null>(null)
   const [playingId, setPlayingId] = useState<string | null>(null)
+  const [hideDuplicates, setHideDuplicates] = useState(true)
 
   const handleDelete = async (clipId: string) => {
     if (!confirm('Delete this clip and its video from storage?')) return
@@ -138,7 +140,7 @@ export default function ClipsPage() {
 
   return (
     <div>
-      <PageHeader title="Clip Library" subtitle={`${clips.length} clips captured`} />
+      <PageHeader title="Clip Library" subtitle={`${hideDuplicates ? clips.filter((c) => !c.is_cluster_duplicate).length : clips.length} clips${hideDuplicates ? ' (duplicates hidden)' : ''}`} />
 
       {/* Filters */}
       <div className={css({ display: 'flex', gap: '12px', marginBottom: '24px' })}>
@@ -163,6 +165,27 @@ export default function ClipsPage() {
             overrides={{ Root: { style: { backgroundColor: colors.bgElevated } } }}
           />
         </div>
+        <button
+          onClick={() => setHideDuplicates((v) => !v)}
+          className={css({
+            fontSize: '12px',
+            fontWeight: 600,
+            color: hideDuplicates ? '#fff' : colors.textSecondary,
+            backgroundColor: hideDuplicates ? colors.primary : colors.bgElevated,
+            border: `1px solid ${hideDuplicates ? colors.primary : colors.border}`,
+            borderRadius: '6px',
+            padding: '4px 14px',
+            cursor: 'pointer',
+            transition: 'all 0.15s',
+            whiteSpace: 'nowrap',
+            ':hover': {
+              borderColor: colors.primary,
+              color: hideDuplicates ? '#fff' : colors.primary,
+            },
+          })}
+        >
+          {hideDuplicates ? 'Duplicates hidden' : 'Show duplicates'}
+        </button>
       </div>
 
       {loading ? (
@@ -181,7 +204,7 @@ export default function ClipsPage() {
             gap: '20px',
           })}
         >
-          {clips.map((clip) => {
+          {(hideDuplicates ? clips.filter((c) => !c.is_cluster_duplicate) : clips).map((clip) => {
             const isExpanded = expandedId === clip.id
             const isPlaying = playingId === clip.id
             const transcript = clip.transcript || ''
@@ -297,6 +320,17 @@ export default function ClipsPage() {
                       {title}
                     </div>
                     <div className={css({ display: 'flex', gap: '6px', flexShrink: 0 })}>
+                      {!hideDuplicates && clip.is_cluster_duplicate && (
+                        <span className={css({
+                          fontSize: '10px', fontWeight: 700,
+                          color: '#92400e', backgroundColor: '#fef3c7',
+                          borderRadius: '10px', padding: '2px 8px',
+                          whiteSpace: 'nowrap',
+                          border: '1px solid #fcd34d',
+                        })}>
+                          Possible Duplicate
+                        </span>
+                      )}
                       {clip.airing_count && clip.airing_count > 1 && (
                         <span className={css({
                           fontSize: '10px', fontWeight: 700,

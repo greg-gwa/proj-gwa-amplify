@@ -4,10 +4,7 @@ import React, { useEffect, useState, useCallback } from 'react'
 import { useStyletron } from 'baseui'
 import { Input, SIZE as INPUT_SIZE } from 'baseui/input'
 import { Select, SIZE } from 'baseui/select'
-import { Button, KIND } from 'baseui/button'
 import { PageHeader } from '@/components/PageHeader'
-import { DataTable } from '@/components/DataTable'
-import { StatusTag } from '@/components/StatusTag'
 import { colors } from '@/theme/customTheme'
 import { formatDate, formatPercent } from '@/lib/format'
 
@@ -22,21 +19,18 @@ interface Clip {
   matched_buy_id: string | null
   confidence: number
   status: string
-  transcript_excerpt: string
+  transcript: string | null
   detection_method: string | null
   video_storage_path: string | null
   matched_spender_name: string | null
+  creative_id: string | null
+  radar_item_id: string | null
+  airing_count: number | null
+  creative_first_station: string | null
+  creative_first_aired: string | null
+  creative_title: string | null
   created_at: string
 }
-
-const statusOptions = [
-  { id: '', label: 'All Statuses' },
-  { id: 'new', label: 'New' },
-  { id: 'matched', label: 'Matched' },
-  { id: 'unmatched', label: 'Unmatched' },
-  { id: 'review', label: 'Review' },
-  { id: 'dismissed', label: 'Dismissed' },
-]
 
 const detectionOptions = [
   { id: '', label: 'All Sources' },
@@ -49,33 +43,31 @@ export default function ClipsPage() {
   const [clips, setClips] = useState<Clip[]>([])
   const [loading, setLoading] = useState(true)
   const [stationFilter, setStationFilter] = useState('')
-  const [statusFilter, setStatusFilter] = useState<Array<{ id: string }>>([])
   const [detectionFilter, setDetectionFilter] = useState<Array<{ id: string }>>([])
-  const [uploadUrl, setUploadUrl] = useState('')
+  const [expandedId, setExpandedId] = useState<string | null>(null)
 
   const fetchData = useCallback(() => {
     setLoading(true)
     const params = new URLSearchParams()
     if (stationFilter) params.set('station', stationFilter)
-    const status = statusFilter[0]?.id
-    if (status) params.set('status', status)
     const detection = detectionFilter[0]?.id
     if (detection) params.set('detection_method', detection)
+    params.set('limit', '100')
     fetch(`/api/clips?${params}`)
       .then((r) => r.json())
       .then((data) => setClips(data.data || []))
       .catch(console.error)
       .finally(() => setLoading(false))
-  }, [stationFilter, statusFilter, detectionFilter])
+  }, [stationFilter, detectionFilter])
 
   useEffect(() => {
     fetchData()
   }, [fetchData])
 
   const detectionLabel = (method: string | null) => {
-    if (method === 'cc_search') return 'CC Search'
-    if (method === 'gap_scan') return 'Gap Scan'
-    return null
+    if (method === 'cc_search') return 'CC'
+    if (method === 'gap_scan') return 'Audio'
+    return '—'
   }
 
   const detectionColor = (method: string | null) => {
@@ -84,195 +76,57 @@ export default function ClipsPage() {
     return colors.textMuted
   }
 
-  const columns = [
-    {
-      header: 'Date',
-      id: 'date',
-      render: (row: Clip) => (
-        <span className={css({ fontSize: '12px', color: colors.textSecondary })}>
-          {row.air_date ? formatDate(row.air_date) : '—'}
-          {row.air_time ? (
-            <span className={css({ display: 'block', fontSize: '11px', color: colors.textMuted })}>{row.air_time}</span>
-          ) : null}
+  /** Highlight political ad patterns in transcript text */
+  const highlightTranscript = (text: string) => {
+    const patterns = [
+      /i(?:'m|\s+am)\s+[\w\s]+and\s+i\s+approve\s+this\s+message/gi,
+      /(?:authorized\s+and\s+)?paid\s+for\s+by\s+[^.]+/gi,
+    ]
+    const highlights: Array<{ start: number; end: number }> = []
+    for (const pat of patterns) {
+      let m: RegExpExecArray | null
+      while ((m = pat.exec(text)) !== null) {
+        highlights.push({ start: m.index, end: m.index + m[0].length })
+      }
+    }
+    if (highlights.length === 0) return text
+    highlights.sort((a, b) => a.start - b.start)
+    const merged: typeof highlights = []
+    for (const h of highlights) {
+      const last = merged[merged.length - 1]
+      if (last && h.start <= last.end) last.end = Math.max(last.end, h.end)
+      else merged.push({ ...h })
+    }
+    const parts: React.ReactNode[] = []
+    let pos = 0
+    for (const h of merged) {
+      if (pos < h.start) parts.push(text.slice(pos, h.start))
+      parts.push(
+        <span key={h.start} style={{ backgroundColor: '#fbbf2440', color: '#d97706', fontWeight: 600, borderRadius: '2px', padding: '0 2px' }}>
+          {text.slice(h.start, h.end)}
         </span>
-      ),
-      width: '100px',
-    },
-    {
-      header: 'Station',
-      id: 'station',
-      render: (row: Clip) => (
-        <span className={css({ fontWeight: 500 })}>{row.station_or_channel || '—'}</span>
-      ),
-      width: '100px',
-    },
-    {
-      header: 'Detection',
-      id: 'detection',
-      render: (row: Clip) => {
-        const label = detectionLabel(row.detection_method)
-        if (!label) return <span className={css({ color: colors.textMuted, fontSize: '12px' })}>—</span>
-        return (
-          <span
-            className={css({
-              fontSize: '11px',
-              fontWeight: 600,
-              color: detectionColor(row.detection_method),
-              backgroundColor: `${detectionColor(row.detection_method)}20`,
-              borderRadius: '4px',
-              padding: '2px 6px',
-              whiteSpace: 'nowrap',
-            })}
-          >
-            {label}
-          </span>
-        )
-      },
-      width: '100px',
-    },
-    {
-      header: 'Duration',
-      id: 'duration',
-      render: (row: Clip) => (row.duration_seconds ? `${row.duration_seconds}s` : '—'),
-      width: '70px',
-    },
-    {
-      header: 'Type',
-      id: 'type',
-      render: (row: Clip) => row.ad_type || '—',
-      width: '80px',
-    },
-    {
-      header: 'Advertiser',
-      id: 'advertiser',
-      render: (row: Clip) => (
-        <span className={css({ fontWeight: 500 })}>
-          {row.advertiser || row.matched_spender_name || '—'}
-        </span>
-      ),
-    },
-    {
-      header: 'Transcript',
-      id: 'transcript',
-      render: (row: Clip) => (
-        <span className={css({ color: colors.textMuted, fontSize: '12px' })}>
-          {row.transcript_excerpt
-            ? row.transcript_excerpt.substring(0, 80) + (row.transcript_excerpt.length > 80 ? '...' : '')
-            : '—'}
-        </span>
-      ),
-    },
-    {
-      header: 'Video',
-      id: 'video',
-      render: (row: Clip) =>
-        row.video_storage_path ? (
-          <a
-            href={`/api/clips/${row.id}/video`}
-            target="_blank"
-            rel="noopener noreferrer"
-            className={css({
-              color: colors.primary,
-              textDecoration: 'none',
-              fontSize: '12px',
-              fontWeight: 500,
-              ':hover': { textDecoration: 'underline' },
-            })}
-          >
-            Watch
-          </a>
-        ) : (
-          <span className={css({ color: colors.textMuted, fontSize: '12px' })}>—</span>
-        ),
-      width: '60px',
-    },
-    {
-      header: 'Buy',
-      id: 'buy',
-      render: (row: Clip) =>
-        row.matched_buy_id ? (
-          <a
-            href={`/ops/buys/${row.matched_buy_id}`}
-            className={css({ color: colors.primary, textDecoration: 'none', fontSize: '12px', ':hover': { textDecoration: 'underline' } })}
-          >
-            View Buy
-          </a>
-        ) : (
-          <span className={css({ color: colors.textMuted, fontSize: '12px' })}>—</span>
-        ),
-      width: '80px',
-    },
-    {
-      header: 'Conf.',
-      id: 'confidence',
-      render: (row: Clip) => {
-        if (!row.confidence) return '—'
-        const color = row.confidence >= 0.8 ? colors.success : row.confidence >= 0.5 ? colors.warning : colors.error
-        return <span className={css({ color, fontWeight: 600 })}>{formatPercent(row.confidence)}</span>
-      },
-      width: '70px',
-    },
-    {
-      header: 'Status',
-      id: 'status',
-      render: (row: Clip) => <StatusTag status={row.status} />,
-      width: '100px',
-    },
-  ]
+      )
+      pos = h.end
+    }
+    if (pos < text.length) parts.push(text.slice(pos))
+    return <>{parts}</>
+  }
+
+  const truncate = (s: string, len: number) => s.length > len ? s.substring(0, len) + '…' : s
 
   return (
     <div>
-      <PageHeader title="Clips" subtitle="Transcribed ad clips" />
-
-      {/* Upload Section */}
-      <div
-        className={css({
-          backgroundColor: colors.bgElevated,
-          borderRadius: '12px',
-          border: `1px solid ${colors.border}`,
-          padding: '16px 20px',
-          marginBottom: '20px',
-          display: 'flex',
-          gap: '12px',
-          alignItems: 'flex-end',
-        })}
-      >
-        <div className={css({ flex: 1 })}>
-          <div className={css({ fontSize: '12px', fontWeight: 600, color: colors.textMuted, marginBottom: '6px', textTransform: 'uppercase', letterSpacing: '0.05em' })}>
-            Submit Clip URL
-          </div>
-          <Input
-            value={uploadUrl}
-            onChange={(e) => setUploadUrl((e.target as HTMLInputElement).value)}
-            placeholder="https://..."
-            size={INPUT_SIZE.compact}
-          />
-        </div>
-        <Button kind={KIND.primary} size={INPUT_SIZE.compact} disabled={!uploadUrl}>
-          Submit
-        </Button>
-      </div>
+      <PageHeader title="Clip Library" subtitle={`${clips.length} clips captured`} />
 
       {/* Filters */}
-      <div className={css({ display: 'flex', gap: '12px', marginBottom: '16px' })}>
-        <div className={css({ width: '200px' })}>
+      <div className={css({ display: 'flex', gap: '12px', marginBottom: '24px' })}>
+        <div className={css({ width: '220px' })}>
           <Input
             value={stationFilter}
             onChange={(e) => setStationFilter((e.target as HTMLInputElement).value)}
             placeholder="Search station..."
             size={INPUT_SIZE.compact}
             clearable
-            overrides={{ Root: { style: { backgroundColor: colors.bgElevated } } }}
-          />
-        </div>
-        <div className={css({ width: '200px' })}>
-          <Select
-            options={statusOptions}
-            value={statusFilter}
-            placeholder="Status"
-            onChange={({ value }) => setStatusFilter(value as Array<{ id: string }>)}
-            clearable
-            size={SIZE.compact}
             overrides={{ Root: { style: { backgroundColor: colors.bgElevated } } }}
           />
         </div>
@@ -289,7 +143,166 @@ export default function ClipsPage() {
         </div>
       </div>
 
-      <DataTable data={clips} columns={columns} loading={loading} emptyMessage="No clips found" />
+      {loading ? (
+        <div className={css({ padding: '60px', textAlign: 'center', color: colors.textMuted, fontSize: '14px' })}>
+          Loading clips...
+        </div>
+      ) : clips.length === 0 ? (
+        <div className={css({ padding: '60px', textAlign: 'center', color: colors.textMuted, fontSize: '14px' })}>
+          No clips found. Run a scan from the Watchlist page to capture ads.
+        </div>
+      ) : (
+        <div
+          className={css({
+            display: 'grid',
+            gridTemplateColumns: 'repeat(auto-fill, minmax(360px, 1fr))',
+            gap: '20px',
+          })}
+        >
+          {clips.map((clip) => {
+            const isExpanded = expandedId === clip.id
+            const transcript = clip.transcript || ''
+            const title = clip.creative_title || clip.advertiser || clip.matched_spender_name || 'Unknown Spender'
+            const hasVideo = !!clip.video_storage_path
+
+            return (
+              <div
+                key={clip.id}
+                className={css({
+                  backgroundColor: colors.bgElevated,
+                  borderRadius: '12px',
+                  border: `1px solid ${colors.border}`,
+                  overflow: 'hidden',
+                  transition: 'box-shadow 0.2s, border-color 0.2s',
+                  ':hover': {
+                    borderColor: colors.primary,
+                    boxShadow: `0 4px 20px ${colors.primary}15`,
+                  },
+                })}
+              >
+                {/* Video area */}
+                {hasVideo ? (
+                  <div className={css({ position: 'relative', backgroundColor: '#000' })}>
+                    <video
+                      controls
+                      preload="metadata"
+                      className={css({
+                        width: '100%',
+                        display: 'block',
+                        maxHeight: '220px',
+                        objectFit: 'contain',
+                      })}
+                    >
+                      <source src={`/api/clips/${clip.id}/video`} type="video/mp4" />
+                    </video>
+                  </div>
+                ) : (
+                  <div
+                    className={css({
+                      height: '80px',
+                      backgroundColor: `${detectionColor(clip.detection_method)}10`,
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      borderBottom: `1px solid ${colors.border}`,
+                    })}
+                  >
+                    <span className={css({ fontSize: '12px', color: colors.textMuted, fontStyle: 'italic' })}>
+                      CC transcript only — no video
+                    </span>
+                  </div>
+                )}
+
+                {/* Card body */}
+                <div className={css({ padding: '14px 16px' })}>
+                  {/* Top row: spender + badges */}
+                  <div className={css({ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '8px' })}>
+                    <div className={css({ fontWeight: 700, fontSize: '14px', color: colors.textPrimary, flex: 1, marginRight: '8px' })}>
+                      {title}
+                    </div>
+                    <div className={css({ display: 'flex', gap: '6px', flexShrink: 0 })}>
+                      {clip.airing_count && clip.airing_count > 1 && (
+                        <span className={css({
+                          fontSize: '10px', fontWeight: 700,
+                          color: '#fff', backgroundColor: colors.warning,
+                          borderRadius: '10px', padding: '2px 8px',
+                          whiteSpace: 'nowrap',
+                        })}>
+                          {clip.airing_count}x aired
+                        </span>
+                      )}
+                      <span className={css({
+                        fontSize: '10px', fontWeight: 700,
+                        color: detectionColor(clip.detection_method),
+                        backgroundColor: `${detectionColor(clip.detection_method)}15`,
+                        borderRadius: '10px', padding: '2px 8px',
+                        whiteSpace: 'nowrap',
+                      })}>
+                        {detectionLabel(clip.detection_method)}
+                      </span>
+                    </div>
+                  </div>
+
+                  {/* Meta row */}
+                  <div className={css({ display: 'flex', gap: '12px', fontSize: '11px', color: colors.textMuted, marginBottom: '10px', flexWrap: 'wrap' })}>
+                    <span>📺 {clip.station_or_channel}</span>
+                    {clip.air_date && <span>📅 {formatDate(clip.air_date)}</span>}
+                    {clip.air_time && <span>🕐 {clip.air_time}</span>}
+                    {clip.confidence && <span>🎯 {formatPercent(clip.confidence)}</span>}
+                  </div>
+
+                  {/* Transcript preview */}
+                  <div
+                    className={css({
+                      fontSize: '12px',
+                      lineHeight: '1.5',
+                      color: colors.textSecondary,
+                      cursor: transcript.length > 120 ? 'pointer' : 'default',
+                    })}
+                    onClick={() => {
+                      if (transcript.length > 120) setExpandedId(isExpanded ? null : clip.id)
+                    }}
+                  >
+                    {isExpanded ? (
+                      <div className={css({ fontFamily: '"Georgia", serif', fontSize: '13px', lineHeight: '1.7', color: colors.textPrimary })}>
+                        {highlightTranscript(transcript)}
+                      </div>
+                    ) : (
+                      <>
+                        {truncate(transcript, 120)}
+                        {transcript.length > 120 && (
+                          <span className={css({ color: colors.primary, fontWeight: 500, marginLeft: '4px' })}>more</span>
+                        )}
+                      </>
+                    )}
+                  </div>
+
+                  {/* Links row */}
+                  <div className={css({ display: 'flex', gap: '12px', marginTop: '12px', flexWrap: 'wrap', borderTop: `1px solid ${colors.border}`, paddingTop: '10px' })}>
+                    {clip.creative_first_aired && (
+                      <span className={css({ fontSize: '10px', color: colors.textMuted })}>
+                        First seen {formatDate(clip.creative_first_aired)}{clip.creative_first_station ? ` on ${clip.creative_first_station}` : ''}
+                      </span>
+                    )}
+                    {clip.radar_item_id && (
+                      <a href={`/ops/radar?highlight=${clip.radar_item_id}`}
+                        className={css({ color: colors.primary, textDecoration: 'none', fontSize: '10px', fontWeight: 600, ':hover': { textDecoration: 'underline' } })}>
+                        FCC Filing
+                      </a>
+                    )}
+                    {clip.matched_buy_id && (
+                      <a href={`/ops/buys/${clip.matched_buy_id}`}
+                        className={css({ color: colors.primary, textDecoration: 'none', fontSize: '10px', fontWeight: 600, ':hover': { textDecoration: 'underline' } })}>
+                        Matched Buy
+                      </a>
+                    )}
+                  </div>
+                </div>
+              </div>
+            )
+          })}
+        </div>
+      )}
     </div>
   )
 }

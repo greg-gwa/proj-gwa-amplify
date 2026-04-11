@@ -18,6 +18,7 @@ import uuid
 from datetime import date, datetime, timedelta, timezone
 from typing import Optional
 
+import anthropic
 import httpx
 from google.cloud import storage as gcs
 from rapidfuzz import fuzz, process as rfprocess
@@ -60,6 +61,271 @@ def _extract_paid_for_by(transcript: str) -> Optional[str]:
         if m:
             return m.group(1).strip()[:300]
     return None
+
+
+# ------------------------------------------------------------------
+# Haiku political ad classifier
+# ------------------------------------------------------------------
+
+_anthropic_client = anthropic.Anthropic()
+
+_CLASSIFY_PROMPT = """Classify this TV broadcast transcript. Is it a POLITICAL AD?
+
+A political ad is a PAID ADVERTISEMENT — a commercial spot — about a political candidate, ballot measure, PAC, or political issue advocacy. It typically mentions candidates by name, uses phrases like "vote for/against", "paid for by", "I approve this message", or attacks/promotes a political figure running for office.
+
+NOT political ads (even if they discuss politics):
+- News segments, anchors discussing politics, panel discussions, interviews
+- Product commercials, lawyer ads, car dealer ads, local business ads
+- TV show promos, PSAs, public affairs programming
+- Commentary or opinion segments from news broadcasts
+
+Key distinction: A political AD is a paid commercial spot trying to persuade voters. A news segment ABOUT politics is NOT a political ad.
+
+The transcript may contain MULTIPLE ads or content spliced together. If there IS a political ad, identify exactly where it starts and ends by quoting the first few words and last few words.
+
+Transcript:
+{transcript}
+
+Respond with ONLY valid JSON:
+{{
+  "is_political": true/false,
+  "confidence": 0.0-1.0,
+  "reason": "one sentence",
+  "ad_start_words": "first 5-8 words of the political ad portion",
+  "ad_end_words": "last 5-8 words of the political ad portion",
+  "ad_slug": "short-kebab-case-id-for-this-specific-ad"
+}}
+
+ad_slug: A unique identifier for THIS SPECIFIC AD CREATIVE — not the candidate, but the specific commercial. Base it on the key message/attack/claim. Examples: "jones-shady-land-deals", "jackson-trump-endorsement", "jones-vape-ban". Two different ads about the same candidate should have DIFFERENT slugs. The same ad with slightly different transcriptions should have the SAME slug.
+
+If is_political is false, set ad_start_words, ad_end_words, and ad_slug to null."""
+
+
+async def _classify_political(transcript: str) -> dict:
+    """
+    Use Claude Haiku to classify whether a transcript is a political ad.
+    Returns dict with is_political, confidence, reason, ad_start_words, ad_end_words.
+    """
+    try:
+        response = _anthropic_client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=300,
+            messages=[{
+                "role": "user",
+                "content": _CLASSIFY_PROMPT.format(transcript=transcript[:2000]),
+            }],
+        )
+        content = response.content[0].text
+        match = re.search(r"\{[\s\S]*\}", content)
+        if match:
+            parsed = json.loads(match.group(0))
+            return {
+                "is_political": bool(parsed.get("is_political", False)),
+                "confidence": float(parsed.get("confidence", 0.0)),
+                "reason": str(parsed.get("reason", "")),
+                "ad_start_words": parsed.get("ad_start_words"),
+                "ad_end_words": parsed.get("ad_end_words"),
+            }
+    except Exception as exc:
+        logger.warning(f"Haiku classification failed: {exc}")
+    # Default: let it through (fail open) so we don't lose real ads
+    return {"is_political": True, "confidence": 0.0, "reason": "classification_error", "ad_start_words": None, "ad_end_words": None}
+
+
+def _find_timestamp(words: list[dict], target_phrase: str, from_end: bool = False) -> Optional[float]:
+    """Find the timestamp in Whisper words that best matches a target phrase.
+    Returns start time (seconds) for ad_start, end time for ad_end.
+    
+    Uses sliding window with normalized word comparison for robust matching.
+    """
+    if not words or not target_phrase:
+        return None
+    
+    def _clean(w: str) -> str:
+        return re.sub(r"[^\w]", "", w.lower())
+    
+    target_tokens = [_clean(t) for t in target_phrase.split() if _clean(t)]
+    if len(target_tokens) < 2:
+        return None
+
+    best_score = 0
+    best_ts = None
+    best_idx = -1
+
+    for i in range(len(words)):
+        # Build a window matching the target phrase length
+        window_size = len(target_tokens)
+        window = words[i:i + window_size]
+        if len(window) < window_size:
+            continue
+        window_tokens = [_clean(w.get("word", "")) for w in window]
+
+        # Count sequential matches (order matters)
+        matches = 0
+        for t, wt in zip(target_tokens, window_tokens):
+            if t == wt or t in wt or wt in t:
+                matches += 1
+
+        if matches > best_score:
+            best_score = matches
+            best_idx = i
+            if from_end:
+                # For ad end, use the end timestamp of the LAST word in the matched window
+                last_word = words[min(i + window_size - 1, len(words) - 1)]
+                best_ts = last_word.get("end", last_word.get("start"))
+            else:
+                best_ts = words[i].get("start")
+
+    # Require at least 60% sequential match
+    if best_score >= len(target_tokens) * 0.6:
+        return best_ts
+    return None
+
+
+async def _fingerprint_audio(audio_path: str) -> Optional[str]:
+    """Generate a Chromaprint audio fingerprint from a WAV file.
+    Returns the compressed fingerprint string, or None on failure.
+    """
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "fpcalc", "-raw", "-json", audio_path,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=15)
+        if proc.returncode != 0:
+            logger.debug(f"fpcalc failed: {stderr.decode()[:200]}")
+            return None
+        data = json.loads(stdout.decode())
+        # Return the fingerprint as a comma-separated string of ints
+        fp = data.get("fingerprint", [])
+        if not fp:
+            return None
+        return ",".join(str(x) for x in fp)
+    except Exception as exc:
+        logger.warning(f"Fingerprint generation failed: {exc}")
+        return None
+
+
+def _fingerprint_similarity(fp1: str, fp2: str) -> float:
+    """Compare two raw chromaprint fingerprints. Returns 0.0-1.0 similarity.
+    Uses bit-level comparison of the integer fingerprint arrays.
+    """
+    if not fp1 or not fp2:
+        return 0.0
+    try:
+        a = [int(x) for x in fp1.split(",")]
+        b = [int(x) for x in fp2.split(",")]
+    except ValueError:
+        return 0.0
+    min_len = min(len(a), len(b))
+    if min_len == 0:
+        return 0.0
+    # Compare overlapping portion using popcount of XOR
+    matching_bits = 0
+    total_bits = 0
+    for i in range(min_len):
+        xor = a[i] ^ b[i]
+        matching_bits += 32 - bin(xor).count("1")
+        total_bits += 32
+    return matching_bits / total_bits if total_bits > 0 else 0.0
+
+
+async def _find_or_create_creative(
+    pool,
+    fingerprint: Optional[str],
+    transcript: str,
+    spender_id: Optional[str],
+    spender_name: Optional[str],
+    station: str,
+    air_date: date,
+    video_storage_path: Optional[str],
+    classification: dict,
+) -> tuple[str, bool]:
+    """Find an existing creative by fingerprint match, or create a new one.
+    Returns (creative_id, is_new).
+    """
+    SIMILARITY_THRESHOLD = 0.85
+
+    # Try fingerprint match against existing creatives
+    if fingerprint:
+        async with pool.acquire() as conn:
+            rows = await conn.fetch(
+                "SELECT id::TEXT, audio_fingerprint FROM creatives WHERE audio_fingerprint IS NOT NULL"
+            )
+        for row in rows:
+            sim = _fingerprint_similarity(fingerprint, row["audio_fingerprint"])
+            if sim >= SIMILARITY_THRESHOLD:
+                creative_id = row["id"]
+                # Increment airing count
+                async with pool.acquire() as conn:
+                    await conn.execute(
+                        "UPDATE creatives SET airing_count = airing_count + 1, last_detected_at = NOW() WHERE id = $1",
+                        uuid.UUID(creative_id),
+                    )
+                logger.info(f"Fingerprint match: creative {creative_id[:8]} (similarity={sim:.3f})")
+                return creative_id, False
+
+    # No match — create new creative
+    creative_id = str(uuid.uuid4())
+    now = datetime.now(timezone.utc)
+    async with pool.acquire() as conn:
+        await conn.execute(
+            """INSERT INTO creatives (
+                id, spender_id, transcript, audio_fingerprint,
+                storage_path, station_first_seen, date_first_aired,
+                airing_count, first_detected_at, last_detected_at,
+                sentiment, ad_type, source_platform,
+                created_at, updated_at
+            ) VALUES (
+                $1, $2, $3, $4,
+                $5, $6, $7,
+                $8, $9, $9,
+                $10, $11, $12,
+                $9, $9
+            )""",
+            uuid.UUID(creative_id),
+            uuid.UUID(spender_id) if spender_id else None,
+            transcript,
+            fingerprint,
+            video_storage_path,
+            station,
+            air_date,
+            1,  # first airing
+            now,
+            classification.get("reason"),
+            None,  # ad_type — could extract from classification later
+            "critical_mention",
+        )
+    logger.info(f"New creative created: {creative_id[:8]}")
+    return creative_id, True
+
+
+async def _trim_video(video_path: str, out_path: str, start_sec: float, end_sec: float) -> bool:
+    """Trim video to [start_sec, end_sec] using ffmpeg."""
+    duration = end_sec - start_sec
+    if duration < 5:  # too short, probably a bad boundary
+        return False
+    async with _ffmpeg_sem:
+        proc = await asyncio.create_subprocess_exec(
+            "ffmpeg", "-y",
+            "-i", video_path,
+            "-ss", str(max(0, start_sec + 0.3)),  # skip slightly INTO the ad to avoid previous commercial bleed
+            "-t", str(duration + 3.0),  # generous buffer at the end so we don't clip the ending
+            "-c", "copy",
+            out_path,
+            stdout=asyncio.subprocess.DEVNULL,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        try:
+            _, stderr = await asyncio.wait_for(proc.communicate(), timeout=30)
+        except asyncio.TimeoutError:
+            proc.kill()
+            return False
+        if proc.returncode != 0:
+            logger.debug(f"trim failed: {stderr.decode()[-200:]}")
+            return False
+    return True
 
 
 # ------------------------------------------------------------------
@@ -201,8 +467,10 @@ async def _extract_audio(video_path: str, audio_path: str) -> bool:
     return True
 
 
-async def _whisper_transcribe(audio_path: str) -> Optional[str]:
-    """Transcribe audio via OpenAI Whisper API."""
+async def _whisper_transcribe(audio_path: str) -> Optional[dict]:
+    """Transcribe audio via OpenAI Whisper API with word-level timestamps.
+    Returns {"text": str, "words": [{"word": str, "start": float, "end": float}, ...]} or None.
+    """
     api_key = os.environ.get("OPENAI_API_KEY", "")
     if not api_key:
         logger.warning("OPENAI_API_KEY not set — skipping transcription")
@@ -213,13 +481,17 @@ async def _whisper_transcribe(audio_path: str) -> Optional[str]:
         resp = await http.post(
             "https://api.openai.com/v1/audio/transcriptions",
             headers={"Authorization": f"Bearer {api_key}"},
-            data={"model": "whisper-1"},
+            data={"model": "whisper-1", "response_format": "verbose_json", "timestamp_granularities[]": "word"},
             files={"file": ("audio.wav", audio_bytes, "audio/wav")},
         )
     if resp.status_code != 200:
         logger.warning(f"Whisper error {resp.status_code}: {resp.text[:200]}")
         return None
-    return resp.json().get("text")
+    data = resp.json()
+    return {
+        "text": data.get("text", ""),
+        "words": data.get("words", []),
+    }
 
 
 def _gcs_client():
@@ -255,12 +527,27 @@ async def _process_clip(
     """
     clip_uuid = str(uuid.uuid4())
 
+    # Dedup: skip if we already have a clip for the same station + date + time
+    station = monitor.get("station_call_sign")
+    if air_time and air_date:
+        async with pool.acquire() as conn:
+            existing = await conn.fetchval(
+                """SELECT id FROM ad_clips
+                   WHERE station_or_channel = $1 AND air_date = $2 AND air_time = $3
+                   LIMIT 1""",
+                station, air_date, air_time,
+            )
+        if existing:
+            logger.debug(f"Dedup: skipping {station} {air_date} {air_time} — already captured as {existing}")
+            return None
+
     with tempfile.TemporaryDirectory() as tmpdir:
         video_path = os.path.join(tmpdir, f"{clip_uuid}.mp4")
         audio_path = os.path.join(tmpdir, f"{clip_uuid}.wav")
 
         # If we already have a CC transcript, skip the expensive HLS download
         # (Pass 1 provides CC text; Pass 2 gap scan needs Whisper so must download)
+        whisper_words: list[dict] = []
         if cc_transcript and len(cc_transcript.strip()) > 20:
             transcript = cc_transcript
             video_storage_path = None  # No video for CC-detected clips (download later if needed)
@@ -271,21 +558,116 @@ async def _process_clip(
                 logger.debug(f"HLS download failed: {hls_url[:80]}")
                 return None
 
-            # Extract audio and transcribe
+            # Extract audio and transcribe (with word timestamps)
             ok = await _extract_audio(video_path, audio_path)
             if not ok:
                 return None
-            transcript = await _whisper_transcribe(audio_path)
-            if not transcript:
+            whisper_result = await _whisper_transcribe(audio_path)
+            if not whisper_result:
                 return None
+            transcript = whisper_result["text"]
+            whisper_words = whisper_result.get("words", [])
 
-            # Upload video to GCS
-            gcs_path = f"clips/{air_date.isoformat()}/{clip_uuid}.mp4"
-            try:
-                video_storage_path = await _upload_gcs(video_path, gcs_path)
-            except Exception as exc:
-                logger.warning(f"GCS upload failed for {clip_uuid}: {exc}")
-                video_storage_path = None
+            # Don't upload yet — classify first, then trim if needed
+            video_storage_path = None
+
+        # Classify: is this actually a political ad?
+        classification = await _classify_political(transcript)
+        if not classification["is_political"]:
+            logger.info(
+                f"Clip {clip_uuid} classified as NOT political "
+                f"(confidence={classification['confidence']:.2f}, reason={classification['reason']})"
+            )
+            return None
+
+        logger.info(
+            f"Clip {clip_uuid} classified as political "
+            f"(confidence={classification['confidence']:.2f}, reason={classification['reason']})"
+        )
+
+        # Trim to just the political ad portion
+        ad_transcript = transcript  # default: full transcript
+        ad_start_words = classification.get("ad_start_words") or ""
+        ad_end_words = classification.get("ad_end_words") or ""
+
+        if whisper_words and os.path.exists(video_path):
+            # Gap scan path: use word timestamps to trim video + transcript
+            start_sec = _find_timestamp(whisper_words, ad_start_words, from_end=False)
+            end_sec = _find_timestamp(whisper_words, ad_end_words, from_end=True)
+
+            if start_sec is not None and end_sec is not None and end_sec > start_sec:
+                trimmed_path = os.path.join(tmpdir, f"{clip_uuid}_trimmed.mp4")
+                trimmed_ok = await _trim_video(video_path, trimmed_path, start_sec, end_sec)
+                if trimmed_ok and os.path.exists(trimmed_path) and os.path.getsize(trimmed_path) > 0:
+                    logger.info(f"Trimmed clip {clip_uuid}: {start_sec:.1f}s → {end_sec:.1f}s")
+                    video_path = trimmed_path
+                    ad_words = [w for w in whisper_words if w.get("start", 0) >= start_sec - 0.5 and w.get("end", 0) <= end_sec + 0.5]
+                    if ad_words:
+                        ad_transcript = " ".join(w.get("word", "") for w in ad_words)
+                else:
+                    logger.debug(f"Trim failed for {clip_uuid}, using full clip")
+            else:
+                logger.debug(f"Could not find ad boundaries for {clip_uuid}, using full clip")
+
+        elif ad_start_words and ad_end_words:
+            # CC search path: no video to trim, but extract the ad text from the full CC segment
+            lower_transcript = transcript.lower()
+            start_idx = lower_transcript.find(ad_start_words.lower()[:30])
+            end_idx = lower_transcript.find(ad_end_words.lower()[:30])
+            if start_idx >= 0 and end_idx > start_idx:
+                # Find the end of the end phrase
+                end_idx = end_idx + len(ad_end_words) + 20  # small buffer
+                ad_transcript = transcript[start_idx:min(end_idx, len(transcript))].strip()
+                logger.info(f"CC transcript trimmed for {clip_uuid}: {len(transcript)} → {len(ad_transcript)} chars")
+            else:
+                logger.debug(f"Could not find CC ad boundaries for {clip_uuid}, using full transcript")
+
+        # Get ad slug from classification for creative dedup
+        ad_slug = classification.get("ad_slug") or ""
+        # Also generate transcript hash as fallback
+        import hashlib
+        norm_transcript = re.sub(r"[^\w\s]", "", ad_transcript.lower())
+        norm_transcript = " ".join(norm_transcript.split())
+        transcript_hash = hashlib.md5(norm_transcript[:200].encode()).hexdigest()
+
+        # Generate audio fingerprint (for metadata)
+        fingerprint: Optional[str] = None
+        if os.path.exists(audio_path):
+            fingerprint = await _fingerprint_audio(audio_path)
+
+        # Check ad_slug against existing creatives (primary dedup)
+        creative_id: Optional[str] = None
+        is_new_creative = True
+        if ad_slug:
+            async with pool.acquire() as conn:
+                existing_creative = await conn.fetchrow(
+                    "SELECT id::TEXT FROM creatives WHERE transcript_hash = $1 LIMIT 1",
+                    ad_slug,
+                )
+            if existing_creative:
+                creative_id = existing_creative["id"]
+                is_new_creative = False
+                async with pool.acquire() as conn:
+                    await conn.execute(
+                        "UPDATE creatives SET airing_count = airing_count + 1, last_detected_at = NOW() WHERE id = $1",
+                        uuid.UUID(creative_id),
+                    )
+                logger.info(f"Slug match: creative {creative_id[:8]} (slug={ad_slug}) — repeat airing")
+
+        # Upload video to GCS (only for new creatives)
+        if os.path.exists(video_path):
+            if is_new_creative:
+                gcs_path = f"clips/{air_date.isoformat()}/{clip_uuid}.mp4"
+                try:
+                    video_storage_path = await _upload_gcs(video_path, gcs_path)
+                except Exception as exc:
+                    logger.warning(f"GCS upload failed for {clip_uuid}: {exc}")
+                    video_storage_path = None
+            else:
+                video_storage_path = None  # reuse existing creative's video
+
+        # Use the ad-specific transcript if we trimmed
+        transcript = ad_transcript
 
         # Match spender
         matched_spender_id: Optional[str] = None
@@ -313,9 +695,38 @@ async def _process_clip(
                 else:
                     matched_spender_name = extracted  # orphaned but we know the name
 
-        # Insert into ad_clips
+        # Create new creative if this is a unique ad
+        if is_new_creative:
+            creative_id = str(uuid.uuid4())
+            now_c = datetime.now(timezone.utc)
+            async with pool.acquire() as conn:
+                await conn.execute(
+                    """INSERT INTO creatives (
+                        id, spender_id, transcript, transcript_hash, audio_fingerprint,
+                        title, storage_path, station_first_seen, date_first_aired,
+                        airing_count, first_detected_at, last_detected_at,
+                        source_platform, created_at, updated_at
+                    ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$11,$12,$11,$11)""",
+                    uuid.UUID(creative_id),
+                    uuid.UUID(matched_spender_id) if matched_spender_id else None,
+                    transcript,
+                    ad_slug or transcript_hash,  # slug preferred, hash fallback
+                    fingerprint,
+                    ad_slug.replace("-", " ").title() if ad_slug else None,  # human-readable title
+                    video_storage_path,
+                    station,
+                    air_date,
+                    1,
+                    now_c,
+                    "critical_mention",
+                )
+            logger.info(f"New creative: {creative_id[:8]} (slug={ad_slug or transcript_hash[:8]})")
+
+        # Resolve radar_item_id from monitor context
+        radar_item_id = monitor.get("radar_item_id")
+
+        # Insert airing record into ad_clips
         now = datetime.now(timezone.utc)
-        station = monitor.get("station_call_sign")
         async with pool.acquire() as conn:
             await conn.execute(
                 """INSERT INTO ad_clips (
@@ -324,6 +735,7 @@ async def _process_clip(
                     cm_scan_id, monitor_id, spender_id,
                     detection_method, video_storage_path,
                     air_date, air_time, matched_spender_name,
+                    creative_id, audio_fingerprint, radar_item_id,
                     created_at, processed_at
                 ) VALUES (
                     $1, $2, $3, $4,
@@ -331,7 +743,8 @@ async def _process_clip(
                     $7, $8, $9,
                     $10, $11,
                     $12, $13, $14,
-                    $15, $15
+                    $15, $16, $17,
+                    $18, $18
                 )""",
                 clip_uuid,
                 "critical_mention", "tv", station,
@@ -339,18 +752,62 @@ async def _process_clip(
                 scan_id, monitor.get("id"), matched_spender_id,
                 detection_method, video_storage_path,
                 air_date, air_time, matched_spender_name,
+                uuid.UUID(creative_id) if creative_id else None,
+                fingerprint,
+                uuid.UUID(radar_item_id) if radar_item_id else None,
                 now,
             )
 
         logger.info(
             f"Clip inserted: {clip_uuid} [{detection_method}] "
-            f"{station} {air_date} spender={matched_spender_name or '(orphaned)'}"
+            f"{station} {air_date} spender={matched_spender_name or '(orphaned)'} "
+            f"creative={creative_id[:8] if creative_id else 'none'} "
+            f"{'(new)' if is_new_creative else '(repeat airing)'}"
         )
         return {
             "clip_id": clip_uuid,
             "matched": matched_spender_id is not None,
             "spender": matched_spender_name,
+            "creative_id": creative_id,
+            "is_new_creative": is_new_creative,
         }
+
+
+def _day_matches(days_str: str, check_date: date) -> bool:
+    """Check if a date falls on a day allowed by the days field.
+    
+    Formats:
+      Bitmask: '1------' (Mon), '-1-----' (Tue), '--1----' (Wed), etc.
+              '1' at position 0=Mon, 1=Tue, 2=Wed, 3=Thu, 4=Fri, 5=Sat, 6=Sun
+      Empty/null: matches all days
+      Date strings (e.g. '03/05/26'): ignored, match all days
+    """
+    if not days_str or len(days_str) != 7:
+        return True  # no filter = all days
+    # check_date.weekday(): 0=Mon, 1=Tue, ... 6=Sun — matches bitmask positions
+    dow = check_date.weekday()
+    return days_str[dow] == '1'
+
+
+def _parse_cm_air_time(raw: str) -> str:
+    """Parse CM air time formats into HH:MM:SS.
+    Handles: '20260406100000' → '10:00:00', '2026-04-06T10:00:00' → '10:00:00',
+    or pass through if already short.
+    """
+    if not raw:
+        return ""
+    raw = raw.strip()
+    # Format: YYYYMMDDHHMMSS
+    if len(raw) == 14 and raw.isdigit():
+        return f"{raw[8:10]}:{raw[10:12]}:{raw[12:14]}"
+    # ISO format
+    if "T" in raw:
+        time_part = raw.split("T")[1][:8]
+        return time_part
+    # Already short
+    if len(raw) <= 8:
+        return raw
+    return raw
 
 
 # ------------------------------------------------------------------
@@ -389,7 +846,7 @@ async def _cc_search(
         if not hls_url:
             continue
         cc_text = clip.get("ccText") or clip.get("transcript") or ""
-        air_time = clip.get("startTime") or clip.get("airTime") or ""
+        air_time = _parse_cm_air_time(clip.get("startTime") or clip.get("airTime") or "")
         tasks.append(_process_clip(
             pool=pool, scan_id=scan_id, monitor=monitor,
             hls_url=hls_url,
@@ -444,7 +901,7 @@ async def _gap_scan(
             # Skip clips without a signed media URL — constructed URLs lack HMAC signatures
             continue
 
-        air_time = clip.get("startTime") or clip.get("airTime") or ""
+        air_time = _parse_cm_air_time(clip.get("startTime") or clip.get("airTime") or "")
         tasks.append(_process_clip(
             pool=pool, scan_id=scan_id, monitor=monitor,
             hls_url=hls_url,
@@ -602,12 +1059,16 @@ async def run_cm_scan(scan_id: str, market_ids: list[str] | None = None) -> dict
             logger.info(f"CM scan {scan_id}: no active monitor windows found")
             return {"status": "complete", "monitors": 0, "clips_found": 0}
 
-        # Pre-compute total days for progress tracking
+        # Pre-compute total days for progress tracking (only counting matching days-of-week)
         total_days = 0
         for m in monitors:
             eff_start = max(m["flight_start"], window_start)
             eff_end = min(m["flight_end"], today)
-            total_days += max(0, (eff_end - eff_start).days + 1)
+            d = eff_start
+            while d <= eff_end:
+                if _day_matches(m.get("days", ""), d):
+                    total_days += 1
+                d += timedelta(days=1)
 
         async with pool.acquire() as conn:
             await conn.execute(
@@ -646,6 +1107,11 @@ async def run_cm_scan(scan_id: str, market_ids: list[str] | None = None) -> dict
 
                 current_day = eff_start
                 while current_day <= eff_end:
+                    # Skip days that don't match the monitor's day-of-week schedule
+                    if not _day_matches(monitor.get("days", ""), current_day):
+                        current_day += timedelta(days=1)
+                        continue
+
                     # Check if scan was killed externally
                     async with pool.acquire() as conn:
                         scan_status = await conn.fetchval(

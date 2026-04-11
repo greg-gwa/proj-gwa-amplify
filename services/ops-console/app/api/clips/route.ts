@@ -34,24 +34,34 @@ export async function GET(request: NextRequest) {
 
     const where = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : ''
 
+    // Group by creative — show one card per unique ad with airing details
     const rows = await query(
-      `SELECT ac.id, ac.source_url, ac.source_platform,
+      `SELECT DISTINCT ON (COALESCE(ac.creative_id, ac.id))
+              ac.id, ac.source_url, ac.source_platform,
               ac.station_or_channel, ac.clip_duration_seconds as duration_seconds,
               ac.ad_type, ac.advertiser, ac.confidence, ac.is_relevant,
-              LEFT(ac.transcript, 200) as transcript_excerpt,
-              ac.detection_method, ac.video_storage_path,
+              ac.transcript as transcript,
+              ac.detection_method,
+              COALESCE(c.storage_path, ac.video_storage_path) as video_storage_path,
               ac.air_date::TEXT as air_date, ac.air_time,
               ac.matched_spender_name,
+              ac.creative_id::TEXT as creative_id,
+              ac.radar_item_id::TEXT as radar_item_id,
+              COALESCE(c.airing_count, 1) as airing_count,
+              c.title as creative_title,
+              c.station_first_seen as creative_first_station,
+              c.date_first_aired::TEXT as creative_first_aired,
               ac.created_at::TEXT as created_at
        FROM ad_clips ac
+       LEFT JOIN creatives c ON c.id = ac.creative_id
        ${where}
-       ORDER BY ac.created_at DESC
+       ORDER BY COALESCE(ac.creative_id, ac.id), ac.created_at ASC
        LIMIT $${idx} OFFSET $${idx + 1}`,
       [...params, limit, offset]
     )
 
     const countResult = await query<{ total: number }>(
-      `SELECT COUNT(*) as total FROM ad_clips ac ${where}`,
+      `SELECT COUNT(DISTINCT COALESCE(ac.creative_id, ac.id)) as total FROM ad_clips ac ${where}`,
       params
     )
 

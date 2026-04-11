@@ -37,6 +37,7 @@ export async function GET(
 
     const gcsResp = await fetch(gcsUrl, {
       headers: { Authorization: `Bearer ${token}` },
+      cache: 'no-store',
     })
 
     if (!gcsResp.ok) {

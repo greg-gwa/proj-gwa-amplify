@@ -1121,19 +1121,6 @@ async def run_cm_scan(scan_id: str, market_ids: list[str] | None = None) -> dict
                         logger.info(f"[scan {scan_id[:8]}] Scan was killed externally — stopping")
                         return {"status": "killed", "clips_found": clips_found}
 
-                    if not await cm.check_budget():
-                        logger.warning(f"CM scan {scan_id}: budget limit reached — stopping")
-                        async with pool.acquire() as conn:
-                            await conn.execute(
-                                """UPDATE cm_scans
-                                   SET status = 'complete', completed_at = NOW(),
-                                       clips_found = $1,
-                                       error_details = 'Stopped early: CM budget limit reached'
-                                   WHERE id = $2""",
-                                clips_found, scan_id,
-                            )
-                        return {"status": "complete", "clips_found": clips_found, "stopped": "budget"}
-
                     logger.info(f"[scan {scan_id[:8]}] {station} day={current_day} — starting CC search")
                     try:
                         n_cc = await _cc_search(pool, cm, scan_id, monitor, channel_id, current_day)

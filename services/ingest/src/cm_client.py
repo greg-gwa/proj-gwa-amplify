@@ -16,8 +16,7 @@ CM_BASE_URL = os.environ.get("CM_BASE_URL", "https://staging-partner.criticalmen
 CM_USERNAME = os.environ.get("CM_USERNAME", "")
 CM_PASSWORD = os.environ.get("CM_PASSWORD", "")
 
-CM_BUDGET_TOTAL = 1000
-CM_ABORT_THRESHOLD = 50  # Stop scanning when fewer than this many requests remain
+# Budget enforcement removed — let CM API itself return errors when limits are hit
 
 
 class CMClient:
@@ -77,18 +76,10 @@ class CMClient:
             )
 
     async def get_requests_used(self) -> int:
-        """Total CM requests ever made (all scans, all time)."""
+        """Total CM requests ever made (all scans, all time). For logging/stats only."""
         async with self.pool.acquire() as conn:
             row = await conn.fetchrow("SELECT COUNT(*)::INTEGER as cnt FROM cm_request_log")
             return row["cnt"] if row else 0
-
-    async def check_budget(self) -> bool:
-        """Return True if it is safe to make another CM request."""
-        used = await self.get_requests_used()
-        remaining = CM_BUDGET_TOTAL - used
-        if remaining < CM_ABORT_THRESHOLD:
-            logger.warning(f"CM budget low: {remaining} requests remaining")
-        return remaining >= CM_ABORT_THRESHOLD
 
     # ------------------------------------------------------------------
     # Auth header helper
@@ -104,8 +95,6 @@ class CMClient:
 
     async def get_channels(self) -> list[dict]:
         """GET /channel — list all CM broadcast channels."""
-        if not await self.check_budget():
-            raise RuntimeError("CM budget exhausted — aborting scan")
         await self._log_request("channels", None, None)
         resp = await self._http.get(
             f"{CM_BASE_URL}/channel",
@@ -130,8 +119,6 @@ class CMClient:
         POST /search — keyword search against CC transcripts.
         start/end: 'YYYY-MM-DD HH:MM:SS'
         """
-        if not await self.check_budget():
-            raise RuntimeError("CM budget exhausted — aborting scan")
         await self._log_request("search", channel_id, station)
         resp = await self._http.post(
             f"{CM_BASE_URL}/search",
@@ -171,8 +158,6 @@ class CMClient:
             return None
 
         if log_request:
-            if not await self.check_budget():
-                raise RuntimeError("CM budget exhausted — aborting scan")
             await self._log_request("stream", channel_id, station)
 
         return (

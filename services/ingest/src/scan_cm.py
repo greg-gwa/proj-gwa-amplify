@@ -2,10 +2,10 @@
 CM Ad Scanner — core scan logic.
 
 For each active monitor window (derived live from radar_items + buy_lines):
-  Pass 1: CC keyword search ("approve this message", "paid for by")
-  Pass 2: CC gap scan (find silent breaks → Whisper transcribe)
-Both passes download HLS clips via ffmpeg, transcribe via Whisper, pattern-match,
-and insert confirmed political ads into ad_clips.
+  Gap scan: find silent CC breaks → download HLS → Whisper transcribe → pattern-match
+  → insert confirmed political ads into ad_clips.
+
+Station-days are processed up to DAY_CONCURRENCY at a time via asyncio.gather.
 """
 
 import asyncio
@@ -32,9 +32,11 @@ logger = logging.getLogger(__name__)
 GCS_BUCKET = "amplify-raw-emails"
 GCS_PROJECT = "proj-amplify"
 SCAN_WINDOW_DAYS = 7
-MAX_FFMPEG = 3  # max concurrent ffmpeg processes
+MAX_FFMPEG = 3       # max concurrent ffmpeg processes
+DAY_CONCURRENCY = 10  # max concurrent station-days
 
 _ffmpeg_sem = asyncio.Semaphore(MAX_FFMPEG)
+_day_sem = asyncio.Semaphore(DAY_CONCURRENCY)
 
 POLITICAL_PATTERNS = [
     r"i(?:'m|\s+am)\s+[\w\s]+and\s+i\s+approve\s+this\s+message",
@@ -467,6 +469,30 @@ async def _extract_audio(video_path: str, audio_path: str) -> bool:
     return True
 
 
+async def _extract_thumbnail(video_path: str, thumb_path: str) -> bool:
+    """Extract a single JPEG frame at 1 second from video."""
+    async with _ffmpeg_sem:
+        proc = await asyncio.create_subprocess_exec(
+            "ffmpeg", "-y",
+            "-ss", "1",
+            "-i", video_path,
+            "-frames:v", "1",
+            "-q:v", "2",
+            thumb_path,
+            stdout=asyncio.subprocess.DEVNULL,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        try:
+            _, stderr = await asyncio.wait_for(proc.communicate(), timeout=15)
+        except asyncio.TimeoutError:
+            proc.kill()
+            return False
+        if proc.returncode != 0:
+            logger.debug(f"thumbnail extract failed: {stderr.decode()[-200:]}")
+            return False
+    return True
+
+
 async def _whisper_transcribe(audio_path: str) -> Optional[dict]:
     """Transcribe audio via OpenAI Whisper API with word-level timestamps.
     Returns {"text": str, "words": [{"word": str, "start": float, "end": float}, ...]} or None.
@@ -655,6 +681,7 @@ async def _process_clip(
                 logger.info(f"Slug match: creative {creative_id[:8]} (slug={ad_slug}) — repeat airing")
 
         # Upload video to GCS (only for new creatives)
+        thumbnail_storage_path = None
         if os.path.exists(video_path):
             if is_new_creative:
                 gcs_path = f"clips/{air_date.isoformat()}/{clip_uuid}.mp4"
@@ -663,6 +690,16 @@ async def _process_clip(
                 except Exception as exc:
                     logger.warning(f"GCS upload failed for {clip_uuid}: {exc}")
                     video_storage_path = None
+
+                # Extract and upload a thumbnail frame at 1 second
+                if video_storage_path:
+                    thumb_local = os.path.join(tmpdir, f"{clip_uuid}_thumb.jpg")
+                    if await _extract_thumbnail(video_path, thumb_local):
+                        try:
+                            thumb_gcs = f"clips/{air_date.isoformat()}/{clip_uuid}_thumb.jpg"
+                            thumbnail_storage_path = await _upload_gcs(thumb_local, thumb_gcs)
+                        except Exception as exc:
+                            logger.warning(f"Thumbnail GCS upload failed for {clip_uuid}: {exc}")
             else:
                 video_storage_path = None  # reuse existing creative's video
 
@@ -733,7 +770,7 @@ async def _process_clip(
                     id, source_platform, media_type, station_or_channel,
                     transcript, is_relevant,
                     cm_scan_id, monitor_id, spender_id,
-                    detection_method, video_storage_path,
+                    detection_method, video_storage_path, thumbnail_storage_path,
                     air_date, air_time, matched_spender_name,
                     creative_id, audio_fingerprint, radar_item_id,
                     created_at, processed_at
@@ -741,16 +778,16 @@ async def _process_clip(
                     $1, $2, $3, $4,
                     $5, $6,
                     $7, $8, $9,
-                    $10, $11,
-                    $12, $13, $14,
-                    $15, $16, $17,
-                    $18, $18
+                    $10, $11, $12,
+                    $13, $14, $15,
+                    $16, $17, $18,
+                    $19, $19
                 )""",
                 clip_uuid,
                 "critical_mention", "tv", station,
                 transcript, True,
                 scan_id, monitor.get("id"), matched_spender_id,
-                detection_method, video_storage_path,
+                detection_method, video_storage_path, thumbnail_storage_path,
                 air_date, air_time, matched_spender_name,
                 uuid.UUID(creative_id) if creative_id else None,
                 fingerprint,
@@ -813,54 +850,6 @@ def _parse_cm_air_time(raw: str) -> str:
 # ------------------------------------------------------------------
 # Per-day scan passes
 # ------------------------------------------------------------------
-
-async def _cc_search(
-    pool,
-    cm: CMClient,
-    scan_id: str,
-    monitor: dict,
-    channel_id: int,
-    day: date,
-) -> int:
-    """Pass 1: search for clips whose CC text contains political disclaimers."""
-    station = monitor["station_call_sign"]
-    time_start = monitor.get("time_start") or "00:00"
-    time_end = monitor.get("time_end") or "23:59"
-    start = f"{day.isoformat()} {time_start}:00"
-    end = f"{day.isoformat()} {time_end}:00"
-
-    try:
-        clips = await cm.search(
-            terms='"approve this message" OR "paid for by"',
-            start=start, end=end,
-            channel_id=channel_id, station=station,
-            limit=100,
-        )
-    except Exception as exc:
-        logger.warning(f"CC search failed {station} {day}: {exc}")
-        return 0
-
-    tasks = []
-    for clip in clips:
-        hls_url = clip.get("media") or clip.get("stream")
-        if not hls_url:
-            continue
-        cc_text = clip.get("ccText") or clip.get("transcript") or ""
-        air_time = _parse_cm_air_time(clip.get("startTime") or clip.get("airTime") or "")
-        tasks.append(_process_clip(
-            pool=pool, scan_id=scan_id, monitor=monitor,
-            hls_url=hls_url,
-            air_date=day, air_time=air_time,
-            detection_method="cc_search",
-            cc_transcript=cc_text,
-        ))
-
-    results = await asyncio.gather(*tasks, return_exceptions=True)
-    found = sum(1 for r in results if isinstance(r, dict))
-    for r in results:
-        if isinstance(r, Exception):
-            logger.warning(f"CC clip error: {r}")
-    return found
 
 
 async def _gap_scan(
@@ -1022,6 +1011,41 @@ async def _fetch_monitors(pool, window_start: date, today: date, market_ids: lis
 
 
 # ------------------------------------------------------------------
+# Per-station-day worker (used by parallel gather in run_cm_scan)
+# ------------------------------------------------------------------
+
+async def _scan_one_station_day(
+    pool, cm: CMClient, scan_id: str, monitor: dict, channel_id: int, day: date
+) -> int:
+    """Gap-scan a single station-day, concurrency-limited by _day_sem. Returns clips found."""
+    async with _day_sem:
+        station = monitor["station_call_sign"]
+        # Bail if scan was killed externally
+        async with pool.acquire() as conn:
+            scan_status = await conn.fetchval(
+                "SELECT status FROM cm_scans WHERE id = $1", scan_id
+            )
+        if scan_status in ("error", "complete"):
+            logger.info(f"[scan {scan_id[:8]}] Scan killed — skipping {station} {day}")
+            return 0
+
+        logger.info(f"[scan {scan_id[:8]}] {station} day={day} — gap scan")
+        try:
+            n = await _gap_scan(pool, cm, scan_id, monitor, channel_id, day)
+        except Exception as exc:
+            logger.exception(f"[scan {scan_id[:8]}] Gap scan error {station} {day}: {exc}")
+            n = 0
+
+        logger.info(f"[scan {scan_id[:8]}] {station} day={day} — done (gap={n})")
+        async with pool.acquire() as conn:
+            await conn.execute(
+                "UPDATE cm_scans SET scanned_days = scanned_days + 1 WHERE id = $1",
+                scan_id,
+            )
+        return n
+
+
+# ------------------------------------------------------------------
 # Main entry point
 # ------------------------------------------------------------------
 
@@ -1076,84 +1100,47 @@ async def run_cm_scan(scan_id: str, market_ids: list[str] | None = None) -> dict
                 len(monitors), total_days, scan_id,
             )
 
-        clips_found = 0
-
         async with CMClient(pool, scan_id) as cm:
             # Build station → channel_id map (one CM request for all channels)
             channel_map = await build_channel_map(pool, cm)
 
-            for mi, monitor in enumerate(monitors):
+            # Build all station-day tasks to run in parallel
+            station_day_tasks = []
+            scanned_monitor_count = 0
+            for monitor in monitors:
                 station = monitor["station_call_sign"]
                 channel_id = channel_map.get(station)
-
-                logger.info(
-                    f"[scan {scan_id[:8]}] Monitor {mi+1}/{len(monitors)}: "
-                    f"{station} / {monitor['spender_name'][:40]} / "
-                    f"{monitor['time_start']}-{monitor['time_end']} / "
-                    f"{monitor['flight_start']}→{monitor['flight_end']}"
-                )
-
                 if not channel_id:
                     logger.warning(f"No CM channel for {station} — skipping monitor")
-                    async with pool.acquire() as conn:
-                        await conn.execute(
-                            "UPDATE cm_scans SET scanned_monitors = scanned_monitors + 1 WHERE id = $1",
-                            scan_id,
-                        )
                     continue
+                scanned_monitor_count += 1
 
                 eff_start = max(monitor["flight_start"], window_start)
                 eff_end = min(monitor["flight_end"], today)
-
-                current_day = eff_start
-                while current_day <= eff_end:
-                    # Skip days that don't match the monitor's day-of-week schedule
-                    if not _day_matches(monitor.get("days", ""), current_day):
-                        current_day += timedelta(days=1)
-                        continue
-
-                    # Check if scan was killed externally
-                    async with pool.acquire() as conn:
-                        scan_status = await conn.fetchval(
-                            "SELECT status FROM cm_scans WHERE id = $1", scan_id,
+                d = eff_start
+                while d <= eff_end:
+                    if _day_matches(monitor.get("days", ""), d):
+                        station_day_tasks.append(
+                            _scan_one_station_day(pool, cm, scan_id, monitor, channel_id, d)
                         )
-                    if scan_status in ("error", "complete"):
-                        logger.info(f"[scan {scan_id[:8]}] Scan was killed externally — stopping")
-                        return {"status": "killed", "clips_found": clips_found}
+                    d += timedelta(days=1)
 
-                    logger.info(f"[scan {scan_id[:8]}] {station} day={current_day} — starting CC search")
-                    try:
-                        n_cc = await _cc_search(pool, cm, scan_id, monitor, channel_id, current_day)
-                    except Exception as exc:
-                        logger.exception(f"[scan {scan_id[:8]}] CC search error {station} {current_day}: {exc}")
-                        n_cc = 0
+            logger.info(
+                f"[scan {scan_id[:8]}] Launching {len(station_day_tasks)} station-day tasks "
+                f"across {scanned_monitor_count} monitors (concurrency={DAY_CONCURRENCY})"
+            )
 
-                    logger.info(f"[scan {scan_id[:8]}] {station} day={current_day} — CC found {n_cc}, starting gap scan")
-                    try:
-                        n_gap = await _gap_scan(pool, cm, scan_id, monitor, channel_id, current_day)
-                    except Exception as exc:
-                        logger.exception(f"[scan {scan_id[:8]}] Gap scan error {station} {current_day}: {exc}")
-                        n_gap = 0
+            results = await asyncio.gather(*station_day_tasks, return_exceptions=True)
+            clips_found = sum(r for r in results if isinstance(r, int))
+            for r in results:
+                if isinstance(r, Exception):
+                    logger.warning(f"Station-day task error: {r}")
 
-                    clips_found += n_cc + n_gap
-                    logger.info(f"[scan {scan_id[:8]}] {station} day={current_day} — done (cc={n_cc} gap={n_gap} total={clips_found})")
-
-                    async with pool.acquire() as conn:
-                        await conn.execute(
-                            """UPDATE cm_scans
-                               SET scanned_days = scanned_days + 1,
-                                   clips_found  = $1
-                               WHERE id = $2""",
-                            clips_found, scan_id,
-                        )
-
-                    current_day += timedelta(days=1)
-
-                async with pool.acquire() as conn:
-                    await conn.execute(
-                        "UPDATE cm_scans SET scanned_monitors = scanned_monitors + 1 WHERE id = $1",
-                        scan_id,
-                    )
+            async with pool.acquire() as conn:
+                await conn.execute(
+                    "UPDATE cm_scans SET scanned_monitors = $1 WHERE id = $2",
+                    scanned_monitor_count, scan_id,
+                )
 
         # Tally matched vs orphaned
         async with pool.acquire() as conn:

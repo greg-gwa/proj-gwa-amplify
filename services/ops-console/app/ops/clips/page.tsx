@@ -22,6 +22,7 @@ interface Clip {
   transcript: string | null
   detection_method: string | null
   video_storage_path: string | null
+  thumbnail_storage_path: string | null
   matched_spender_name: string | null
   creative_id: string | null
   radar_item_id: string | null
@@ -46,6 +47,7 @@ export default function ClipsPage() {
   const [detectionFilter, setDetectionFilter] = useState<Array<{ id: string }>>([])
   const [expandedId, setExpandedId] = useState<string | null>(null)
   const [deletingId, setDeletingId] = useState<string | null>(null)
+  const [playingId, setPlayingId] = useState<string | null>(null)
 
   const handleDelete = async (clipId: string) => {
     if (!confirm('Delete this clip and its video from storage?')) return
@@ -181,9 +183,11 @@ export default function ClipsPage() {
         >
           {clips.map((clip) => {
             const isExpanded = expandedId === clip.id
+            const isPlaying = playingId === clip.id
             const transcript = clip.transcript || ''
             const title = clip.creative_title || clip.advertiser || clip.matched_spender_name || 'Unknown Spender'
             const hasVideo = !!clip.video_storage_path
+            const hasThumbnail = !!clip.thumbnail_storage_path
 
             return (
               <div
@@ -200,21 +204,73 @@ export default function ClipsPage() {
                   },
                 })}
               >
-                {/* Video area */}
+                {/* Video area — thumbnail until clicked */}
                 {hasVideo ? (
                   <div className={css({ position: 'relative', backgroundColor: '#000' })}>
-                    <video
-                      controls
-                      preload="metadata"
-                      className={css({
-                        width: '100%',
-                        display: 'block',
-                        maxHeight: '220px',
-                        objectFit: 'contain',
-                      })}
-                    >
-                      <source src={`/api/clips/${clip.id}/video`} type="video/mp4" />
-                    </video>
+                    {isPlaying ? (
+                      <video
+                        controls
+                        autoPlay
+                        preload="auto"
+                        className={css({
+                          width: '100%',
+                          display: 'block',
+                          maxHeight: '220px',
+                          objectFit: 'contain',
+                        })}
+                      >
+                        <source src={`/api/clips/${clip.id}/video`} type="video/mp4" />
+                      </video>
+                    ) : (
+                      <div
+                        onClick={() => setPlayingId(clip.id)}
+                        className={css({
+                          position: 'relative',
+                          cursor: 'pointer',
+                          maxHeight: '220px',
+                          overflow: 'hidden',
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                        })}
+                      >
+                        {hasThumbnail ? (
+                          <img
+                            src={`/api/clips/${clip.id}/thumbnail`}
+                            alt="Ad thumbnail"
+                            className={css({
+                              width: '100%',
+                              maxHeight: '220px',
+                              objectFit: 'contain',
+                              display: 'block',
+                            })}
+                          />
+                        ) : (
+                          <div className={css({
+                            width: '100%',
+                            height: '140px',
+                            backgroundColor: '#111',
+                          })} />
+                        )}
+                        {/* Play button overlay */}
+                        <div className={css({
+                          position: 'absolute',
+                          width: '52px',
+                          height: '52px',
+                          borderRadius: '50%',
+                          backgroundColor: 'rgba(0,0,0,0.65)',
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                          transition: 'background-color 0.15s',
+                          ':hover': { backgroundColor: 'rgba(0,0,0,0.85)' },
+                        })}>
+                          <svg width="20" height="20" viewBox="0 0 20 20" fill="white">
+                            <polygon points="5,3 18,10 5,17" />
+                          </svg>
+                        </div>
+                      </div>
+                    )}
                   </div>
                 ) : (
                   <div

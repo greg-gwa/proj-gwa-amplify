@@ -43,6 +43,7 @@ export async function GET(request: NextRequest) {
               ac.transcript as transcript,
               ac.detection_method,
               COALESCE(c.storage_path, ac.video_storage_path) as video_storage_path,
+              ac.thumbnail_storage_path,
               ac.air_date::TEXT as air_date, ac.air_time,
               ac.matched_spender_name,
               ac.creative_id::TEXT as creative_id,

@@ -3,6 +3,87 @@ import { query } from '@/lib/db'
 
 export const dynamic = 'force-dynamic'
 
+// --- Bigram clustering helpers ---
+
+function getBigrams(str: string): Set<string> {
+  const s = str.toLowerCase().replace(/[^a-z0-9]/g, ' ')
+  const bigrams = new Set<string>()
+  for (let i = 0; i < s.length - 1; i++) bigrams.add(s.slice(i, i + 2))
+  return bigrams
+}
+
+function bigramSimilarity(a: string, b: string): number {
+  const setA = getBigrams(a)
+  const setB = getBigrams(b)
+  let intersection = 0
+  for (const bg of setA) {
+    if (setB.has(bg)) intersection++
+  }
+  const union = setA.size + setB.size - intersection
+  return union === 0 ? 0 : intersection / union
+}
+
+type ClipRow = Record<string, unknown> & {
+  transcript: string | null
+  station_or_channel: string
+  air_date: string | null
+  air_time: string | null
+  created_at: string
+}
+
+function clusterByTranscript(clips: ClipRow[]): ClipRow[] {
+  const THRESHOLD = 0.80
+
+  type Cluster = {
+    headTranscript: string
+    clips: ClipRow[]
+    newestAt: string
+  }
+
+  const clusters: Cluster[] = []
+
+  for (const clip of clips) {
+    const t = (clip.transcript || '').trim()
+    let matched = false
+
+    if (t.length > 0) {
+      for (const cluster of clusters) {
+        if (bigramSimilarity(t, cluster.headTranscript) > THRESHOLD) {
+          cluster.clips.push(clip)
+          if (clip.created_at > cluster.newestAt) cluster.newestAt = clip.created_at
+          matched = true
+          break
+        }
+      }
+    }
+
+    if (!matched) {
+      clusters.push({ headTranscript: t, clips: [clip], newestAt: clip.created_at })
+    }
+  }
+
+  // Sort clusters: most recently seen first
+  clusters.sort((a, b) => (b.newestAt > a.newestAt ? 1 : b.newestAt < a.newestAt ? -1 : 0))
+
+  // Within each cluster: alphabetical by station, then air_date, then air_time
+  for (const cluster of clusters) {
+    cluster.clips.sort((a, b) => {
+      const stn = (a.station_or_channel || '').localeCompare(b.station_or_channel || '')
+      if (stn !== 0) return stn
+      const dateA = a.air_date || ''
+      const dateB = b.air_date || ''
+      if (dateA !== dateB) return dateA < dateB ? -1 : 1
+      const timeA = a.air_time || ''
+      const timeB = b.air_time || ''
+      return timeA < timeB ? -1 : timeA > timeB ? 1 : 0
+    })
+  }
+
+  return clusters.flatMap((c) => c.clips)
+}
+
+// --- Route handler ---
+
 export async function GET(request: NextRequest) {
   try {
     const { searchParams } = new URL(request.url)
@@ -34,10 +115,8 @@ export async function GET(request: NextRequest) {
 
     const where = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : ''
 
-    // Group by creative — show one card per unique ad with airing details
-    const rows = await query(
-      `SELECT DISTINCT ON (COALESCE(ac.creative_id, ac.id))
-              ac.id, ac.source_url, ac.source_platform,
+    const rows = await query<ClipRow>(
+      `SELECT ac.id, ac.source_url, ac.source_platform,
               ac.station_or_channel, ac.clip_duration_seconds as duration_seconds,
               ac.ad_type, ac.advertiser, ac.confidence, ac.is_relevant,
               ac.transcript as transcript,
@@ -56,18 +135,20 @@ export async function GET(request: NextRequest) {
        FROM ad_clips ac
        LEFT JOIN creatives c ON c.id = ac.creative_id
        ${where}
-       ORDER BY COALESCE(ac.creative_id, ac.id), ac.created_at ASC
+       ORDER BY ac.created_at DESC
        LIMIT $${idx} OFFSET $${idx + 1}`,
       [...params, limit, offset]
     )
 
     const countResult = await query<{ total: number }>(
-      `SELECT COUNT(DISTINCT COALESCE(ac.creative_id, ac.id)) as total FROM ad_clips ac ${where}`,
+      `SELECT COUNT(*) as total FROM ad_clips ac ${where}`,
       params
     )
 
+    const clustered = clusterByTranscript(rows)
+
     return NextResponse.json({
-      data: rows,
+      data: clustered,
       total: Number(countResult[0]?.total ?? 0),
     })
   } catch (error) {
